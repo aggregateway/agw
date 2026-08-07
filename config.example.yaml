@@ -1,6 +1,22 @@
 debug: false
+appSelectors:
+  - name: openai-client
+    match:
+      headers:
+        - name: User-Agent
+          operator: contains
+          value: OpenAI
+  - name: fallback
 upstreams:
   - url: https://pai.d1v.ai/v1
+    name: luna-primary
+    appSelectors: [openai-client]
     authorization:
       type: bearer
       value: replace-with-your-token
+  - url: https://backup.example/v1
+    name: fallback
+    appSelectors: [fallback]
+    authorization:
+      type: bearer
+      value: replace-with-your-backup-token

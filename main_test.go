@@ -226,6 +226,128 @@ func TestParseSettingsSupportsLegacyAndObjectFormats(t *testing.T) {
 	}
 }
 
+func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
+	selectors := []AppSelector{
+		{Name: "codex-luna", Match: AppSelectorMatch{Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "Codex"}}}},
+		{Name: "default"},
+	}
+	upstreams := []Upstream{
+		{Name: "d1v-primary", AppSelectors: []string{"codex-luna"}},
+		{Name: "deepseek", AppSelectors: []string{"default"}},
+		{Name: "d1v-backup", AppSelectors: []string{"codex-luna"}},
+	}
+	request := http.Header{"User-Agent": []string{"Codex/1.0"}}
+	routed, selected, err := routeUpstreams(upstreams, selectors, request)
+	if err != nil || selected != "codex-luna" || len(routed) != 2 {
+		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
+	}
+	if routed[0].Index != 0 || routed[1].Index != 2 {
+		t.Fatalf("non-compatible upstream entered retry chain: %#v", routed)
+	}
+
+	routed, selected, err = routeUpstreams(upstreams, selectors, http.Header{"User-Agent": []string{"OpenAI/1.0"}})
+	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
+		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
+	}
+}
+
+func TestHeaderMatchCaseSensitivityAndRegex(t *testing.T) {
+	headers := http.Header{"User-Agent": []string{"Codex/1.0"}}
+	if !headerMatchMatches(HeaderMatch{Name: "User-Agent", Operator: "exact", Value: "codex/1.0"}, headers) {
+		t.Fatal("exact match should be case-insensitive by default")
+	}
+	if headerMatchMatches(HeaderMatch{Name: "User-Agent", Operator: "exact", Value: "codex/1.0", CaseSensitive: true}, headers) {
+		t.Fatal("case-sensitive exact match accepted a different case")
+	}
+	if !headerMatchMatches(HeaderMatch{Name: "User-Agent", Operator: "regex", Value: `^codex/[0-9]+\.[0-9]+$`}, headers) {
+		t.Fatal("regex match should be case-insensitive by default")
+	}
+	if headerMatchMatches(HeaderMatch{Name: "User-Agent", Operator: "regex", Value: `^codex/[0-9]+\.[0-9]+$`, CaseSensitive: true}, headers) {
+		t.Fatal("case-sensitive regex accepted a different case")
+	}
+	_, err := parseSettings([]byte(`appSelectors:
+  - name: invalid
+    match:
+      headers:
+        - name: User-Agent
+          operator: regex
+          value: "["
+upstreams:
+  - url: https://example.com
+    appSelectors: [invalid]
+`))
+	if err == nil || !strings.Contains(err.Error(), "invalid regex") {
+		t.Fatalf("invalid regex error = %v", err)
+	}
+}
+
+func TestAppSelectorWithoutRulesMatchesAllRequests(t *testing.T) {
+	selector := AppSelector{Name: "catch-all"}
+	if !appSelectorMatches(selector, http.Header{"User-Agent": []string{"Codex/1.0"}}) {
+		t.Fatal("AppSelector without header rules should match every request")
+	}
+}
+
+func TestAppSelectorValidationRejectsUnknownUpstreamReference(t *testing.T) {
+	_, err := parseSettings([]byte(`appSelectors:
+  - name: codex
+    match:
+      headers:
+        - name: User-Agent
+          operator: contains
+          value: Codex
+upstreams:
+  - name: primary
+    url: https://example.com
+    appSelectors: [missing]
+`))
+	if err == nil || !strings.Contains(err.Error(), "unknown app selector") {
+		t.Fatalf("unknown selector reference error = %v", err)
+	}
+}
+
+func TestProxyRetriesWithinMatchedAppSelectorOnly(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer primary.Close()
+	deepseek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("incompatible upstream received routed request")
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer deepseek.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "luna backup")
+	}))
+	defer backup.Close()
+
+	var logs bytes.Buffer
+	proxy := &Proxy{
+		Upstreams: []Upstream{
+			{Name: "luna-primary", URL: primary.URL, AppSelectors: []string{"codex-luna"}, Authorization: &Authorization{Type: "none"}},
+			{Name: "ds-video", URL: deepseek.URL, AppSelectors: []string{"deepseek"}, Authorization: &Authorization{Type: "none"}},
+			{Name: "luna-backup", URL: backup.URL, AppSelectors: []string{"codex-luna"}, Authorization: &Authorization{Type: "none"}},
+		},
+		AppSelectors: []AppSelector{
+			{Name: "codex-luna", Match: AppSelectorMatch{Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "Codex"}}}},
+			{Name: "deepseek", Match: AppSelectorMatch{Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "DeepSeek"}}}},
+		},
+		Client: http.DefaultClient,
+		Logger: log.New(&logs, "", 0),
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("payload"))
+	request.Header.Set("User-Agent", "Codex/1.0")
+	proxy.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "luna backup" {
+		t.Fatalf("routed response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(logs.String(), "UPSTREAM[2:luna-backup] | ATTEMPT") || strings.Contains(logs.String(), "UPSTREAM[1:ds-video] | ATTEMPT") {
+		t.Fatalf("retry chain crossed AppSelector boundary: %q", logs.String())
+	}
+}
+
 func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 	configPath := t.TempDir() + "/config.yaml"
 	if err := os.WriteFile(configPath, []byte("debug: false\nupstreams:\n- url: https://old.example\n  authorization:\n    type: none\n"), 0600); err != nil {
@@ -237,19 +359,255 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 		Logger:    log.New(io.Discard, "", 0),
 		Config:    configPath,
 	}
-	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"upstreams":[{"url":"https://new.example","authorization":{"type":"none"}}]}`))
+	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"appSelectors":[{"name":"codex","match":{"headers":[{"name":"User-Agent","operator":"regex","value":"^Codex","caseSensitive":true}]}}],"upstreams":[{"url":"https://new.example","appSelectors":["codex"],"authorization":{"type":"none"}}]}`))
 	recorder := httptest.NewRecorder()
 
 	proxy.ServeHTTP(recorder, req)
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("response status = %d", recorder.Code)
 	}
-	if !proxy.Debug || len(proxy.Upstreams) != 1 || proxy.Upstreams[0].URL != "https://new.example" {
-		t.Fatalf("runtime settings were not updated: debug=%t upstreams=%#v", proxy.Debug, proxy.Upstreams)
+	if !proxy.Debug || len(proxy.Upstreams) != 1 || proxy.Upstreams[0].URL != "https://new.example" || len(proxy.AppSelectors) != 1 || !proxy.AppSelectors[0].Match.Headers[0].CaseSensitive {
+		t.Fatalf("runtime settings were not updated: debug=%t upstreams=%#v selectors=%#v", proxy.Debug, proxy.Upstreams, proxy.AppSelectors)
 	}
 	settings, err := loadSettings(configPath)
-	if err != nil || !settings.Debug || settings.Upstreams[0].URL != "https://new.example" {
+	if err != nil || !settings.Debug || settings.Upstreams[0].URL != "https://new.example" || !settings.AppSelectors[0].Match.Headers[0].CaseSensitive {
 		t.Fatalf("saved settings = %#v, error = %v", settings, err)
+	}
+}
+
+func TestSessionHubTracksLifecycleAndRedactsHeaders(t *testing.T) {
+	hub := newSessionHub()
+	defer hub.close()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("payload"))
+	req.Header.Set("Session-Id", "session-primary")
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("X-Client-Request-Id", "request-1")
+
+	tracked := hub.start(req)
+	cards := hub.cards()
+	if len(cards) != 1 || cards[0].State != "connecting" || len(cards[0].ID) != 36 || cards[0].ID[14] != '7' {
+		t.Fatalf("initial cards = %#v", cards)
+	}
+	tracked.connected(http.StatusOK)
+	requestBody := []byte(strings.Repeat("request-body-", 2048))
+	tracked.setRequestBody("application/json", requestBody)
+	tracked.setContentType("text/event-stream")
+	tracked.captureResponse([]byte("data: hello\\n\\n"))
+	tracked.complete(http.StatusOK, 2048, nil)
+
+	cards = hub.cards()
+	if cards[0].State != "completed" || cards[0].Status != "200" || cards[0].Latest.Bytes != "2.0 KB" {
+		t.Fatalf("completed card = %#v", cards[0])
+	}
+	content, err := hub.renderCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(content, "secret-token") || !strings.Contains(content, "[redacted]") {
+		t.Fatalf("session card exposes a sensitive header: %s", content)
+	}
+	if strings.Contains(content, "data: hello") || strings.Contains(content, "request-body-") {
+		t.Fatalf("session card embeds payload data: %s", content)
+	}
+	if !strings.Contains(content, `data-session-payload="request"`) || !strings.Contains(content, `data-session-payload="response"`) {
+		t.Fatalf("session card does not include payload loaders: %s", content)
+	}
+	if !strings.Contains(content, `<span class="session-metric session-transfer"><small>latest transfer</small><strong>2.0 KB</strong></span>`) {
+		t.Fatalf("session card does not include the latest transfer summary: %s", content)
+	}
+	capturedRequestBody, found, err := hub.readPayload(cards[0].ID, "request", 0)
+	if err != nil || !found || !bytes.Equal(capturedRequestBody, requestBody) {
+		t.Fatalf("request payload length = %d, found=%t, err=%v", len(capturedRequestBody), found, err)
+	}
+	responseBody, found, err := hub.readPayload(cards[0].ID, "response", 0)
+	if err != nil || !found || string(responseBody) != "data: hello\\n\\n" {
+		t.Fatalf("response payload = %q, found=%t, err=%v", responseBody, found, err)
+	}
+}
+
+func TestSessionHubUsesSeparateServerUUIDv7s(t *testing.T) {
+	hub := newSessionHub()
+	defer hub.close()
+	first := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	second := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	first.Header.Set("Session-Id", "client-reused-session")
+	second.Header.Set("Session-Id", "client-reused-session")
+	hub.start(first)
+	hub.start(second)
+
+	cards := hub.cards()
+	if len(cards) != 2 || cards[0].ID == cards[1].ID {
+		t.Fatalf("server sessions were grouped: %#v", cards)
+	}
+	for _, card := range cards {
+		if len(card.ID) != 36 || card.ID[14] != '7' || (card.ID[19] != '8' && card.ID[19] != '9' && card.ID[19] != 'a' && card.ID[19] != 'b') {
+			t.Fatalf("session ID is not UUIDv7: %q", card.ID)
+		}
+	}
+}
+
+func TestProxyInterceptionPreservesSSEStream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher := w.(http.Flusher)
+		for _, chunk := range []string{"data: first\\n\\n", "data: second\\n\\n"} {
+			_, _ = io.WriteString(w, chunk)
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	hub := newSessionHub()
+	defer hub.close()
+	proxy := &Proxy{Upstreams: []Upstream{{URL: upstream.URL, Authorization: &Authorization{Type: "none"}}}, Client: http.DefaultClient, Logger: log.New(io.Discard, "", 0), Sessions: hub}
+	request := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	request.Header.Set("Session-Id", "stream-session")
+	recorder := httptest.NewRecorder()
+	requestLogger(proxy.Logger, proxy).ServeHTTP(recorder, request)
+
+	want := "data: first\\n\\ndata: second\\n\\n"
+	if got := recorder.Body.String(); got != want {
+		t.Fatalf("client stream = %q, want %q", got, want)
+	}
+	cards := hub.cards()
+	responseBody, found, err := hub.readPayload(cards[0].ID, "response", 0)
+	if err != nil || !found || string(responseBody) != want {
+		t.Fatalf("intercepted stream = %q, found=%t, err=%v", responseBody, found, err)
+	}
+}
+
+func TestProxySessionCardShowsAppSelectorAndUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	hub := newSessionHub()
+	defer hub.close()
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{Name: "d1v.ai", URL: upstream.URL, AppSelectors: []string{"codex-luna"}, Authorization: &Authorization{Type: "none"}}},
+		AppSelectors: []AppSelector{{Name: "codex-luna", Match: AppSelectorMatch{Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "Codex"}}}}},
+		Client:       http.DefaultClient,
+		Logger:       log.New(io.Discard, "", 0),
+		Sessions:     hub,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("payload"))
+	request.Header.Set("User-Agent", "Codex/1.0")
+	requestLogger(proxy.Logger, proxy).ServeHTTP(httptest.NewRecorder(), request)
+
+	content, err := hub.renderCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "codex-luna") || !strings.Contains(content, "UPSTREAM[0:d1v.ai]") {
+		t.Fatalf("session card route details missing: %s", content)
+	}
+}
+
+func TestSessionResponsePayloadReadsLatestDiskBytes(t *testing.T) {
+	hub := newSessionHub()
+	defer hub.close()
+	request := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	request.Header.Set("Session-Id", "preview-tail")
+	tracked := hub.start(request)
+	tracked.setContentType("text/event-stream")
+	tracked.captureResponse([]byte(strings.Repeat("a", 128<<10) + "tail"))
+
+	cards := hub.cards()
+	payload, found, err := hub.readPayload(cards[0].ID, "response", 64<<10)
+	if err != nil || !found {
+		t.Fatalf("response payload found=%t, err=%v", found, err)
+	}
+	if got := len(payload); got != 64<<10 {
+		t.Fatalf("tail length = %d, want %d", got, 64<<10)
+	}
+	if !strings.HasSuffix(string(payload), "tail") {
+		t.Fatalf("tail does not retain latest response data")
+	}
+}
+
+func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, false)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("config page status = %d", recorder.Code)
+	}
+	content := recorder.Body.String()
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", "Header match rules", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page missing %q", expected)
+		}
+	}
+	workspace := strings.Index(content, `aria-labelledby="routing-title"`)
+	addUpstream := strings.Index(content, `id="add-upstream"`)
+	if workspace < 0 || addUpstream < workspace {
+		t.Fatalf("upstream add button is outside its routing container")
+	}
+	routingEnd := strings.Index(content[workspace:], "</section>")
+	selectorWorkspace := strings.Index(content, `class="workspace selector-workspace"`)
+	if routingEnd < 0 || selectorWorkspace < 0 || selectorWorkspace <= workspace+routingEnd {
+		t.Fatalf("AppSelector registry is still nested in the upstream routing container")
+	}
+}
+
+func TestWriteSessionSSERemovesCarriageReturns(t *testing.T) {
+	var output bytes.Buffer
+	if err := writeSessionSSE(&output, "first\r\nsecond"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(output.String(), "\r") || !strings.Contains(output.String(), "event: sessions\n") {
+		t.Fatalf("invalid session SSE frame: %q", output.String())
+	}
+}
+
+func TestSessionRouteShowsTrackedProxyRequest(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("accepted"))
+	}))
+	defer upstream.Close()
+
+	hub := newSessionHub()
+	defer hub.close()
+	proxy := &Proxy{
+		Upstreams: []Upstream{{URL: upstream.URL, Authorization: &Authorization{Type: "none"}}},
+		Client:    http.DefaultClient,
+		Logger:    log.New(io.Discard, "", 0),
+		Sessions:  hub,
+	}
+	handler := requestLogger(proxy.Logger, proxy)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("payload"))
+	request.Header.Set("Session-Id", "session-route")
+	request.Header.Set("Authorization", "Bearer client-secret")
+	request.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "Intercepted request") {
+		t.Fatalf("session route response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "client-secret") || !strings.Contains(recorder.Body.String(), "[redacted]") {
+		t.Fatalf("session route exposes authorization: %q", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), ">payload<") {
+		t.Fatalf("session route embeds request body: %q", recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "Gateway events") || !strings.Contains(recorder.Body.String(), "attempt") || !strings.Contains(recorder.Body.String(), "response") {
+		t.Fatalf("session route does not show gateway events: %q", recorder.Body.String())
+	}
+	cards := hub.cards()
+	requestPayload := httptest.NewRecorder()
+	proxy.ServeHTTP(requestPayload, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/request", nil))
+	if requestPayload.Code != http.StatusOK || requestPayload.Body.String() != "payload" {
+		t.Fatalf("request payload response = %d %q", requestPayload.Code, requestPayload.Body.String())
+	}
+	responsePayload := httptest.NewRecorder()
+	proxy.ServeHTTP(responsePayload, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/response", nil))
+	if responsePayload.Code != http.StatusOK || responsePayload.Body.String() != "accepted" {
+		t.Fatalf("response payload response = %d %q", responsePayload.Code, responsePayload.Body.String())
 	}
 }
 

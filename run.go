@@ -47,9 +47,11 @@ func Run(args []string) error {
 		logger.Printf("| SERVER | CONFIG_ERROR | invalid PORT %q, using %s", invalidPort, listenDefault)
 	}
 	hub := newLogHub()
+	sessions := newSessionHub()
+	defer sessions.close()
 	logger.SetOutput(io.MultiWriter(os.Stderr, hub))
 	client := newHTTPClient(*timeout)
-	proxy := &Proxy{Upstreams: settings.Upstreams, Client: client, Logger: logger, Config: configPath, LogHub: hub, Debug: settings.Debug || *debug}
+	proxy := &Proxy{Upstreams: settings.Upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: configPath, LogHub: hub, Sessions: sessions, Debug: settings.Debug || *debug}
 
 	server := &http.Server{Addr: *listen, Handler: requestLogger(logger, proxy), ReadHeaderTimeout: 10 * time.Second}
 	logger.Printf("| SERVER | LISTEN | addr=%s upstreams=%d debug=%t", *listen, len(settings.Upstreams), proxy.Debug)

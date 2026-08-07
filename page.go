@@ -3,18 +3,22 @@ package agw
 import (
 	"html/template"
 	"net/http"
+	"strings"
 )
 
 type configView struct {
-	Index     int
-	URL       string
-	AuthType  string
-	AuthValue string
-	HasAuth   bool
+	Index            int
+	Name             string
+	URL              string
+	AuthType         string
+	AuthValue        string
+	AppSelectorsText string
+	HasAuth          bool
 }
 
 type pageView struct {
-	Debug bool
+	Debug        bool
+	AppSelectors []AppSelector
 }
 
 var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
@@ -23,13 +27,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AGW Control</title>
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem('agw-theme') || 'dark'; } catch (_) { document.documentElement.dataset.theme = 'dark'; }</script>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
   <script src="https://unpkg.com/lucide@0.468.0"></script>
   <style>
-    :root { color-scheme: light; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root[data-theme="light"] { color-scheme: light; }
     * { box-sizing: border-box; }
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .sr-only { position: absolute; inset: 0; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
     body { margin: 0; color: #1b2927; background: #eef2f0; }
     button, input, select { font: inherit; }
     .shell { width: min(1220px, calc(100% - 40px)); margin: 28px auto 40px; }
@@ -54,25 +60,33 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .icon-button.danger { color: #9e3e3e; }
     .icon-button.danger:hover { color: #862f2f; background: #fff1f0; border-color: #e3aaa5; }
     .workspace { background: #fff; border: 1px solid #d7e0dc; border-top: 0; border-radius: 0 0 8px 8px; box-shadow: 0 12px 28px rgba(24, 44, 39, .06); }
+    .selector-workspace { margin-top: 20px; border-top: 1px solid #d7e0dc; border-radius: 8px; }
     .workspace-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; border-bottom: 1px solid #e5ece9; }
     .section-title { margin: 0; color: #213633; font-size: 15px; font-weight: 700; }
     .section-note { margin: 3px 0 0; color: #71827e; font-size: 12px; }
+    .section-actions { display: flex; align-items: center; gap: 10px; }
     .summary { display: flex; align-items: center; gap: 8px; color: #53716a; font-size: 12px; white-space: nowrap; }
     .summary-dot { width: 7px; height: 7px; background: #7fae33; border-radius: 50%; }
     #status { min-width: 72px; color: #637570; font-size: 12px; text-align: right; }
     #status.error { color: #a83e3e; }
     #status.success { color: #267d63; }
-    .table-scroll { overflow-x: auto; }
-    table { width: 100%; min-width: 840px; border-collapse: collapse; table-layout: fixed; }
-    th, td { padding: 12px 14px; border-bottom: 1px solid #e7edeb; text-align: left; vertical-align: middle; }
-    th { color: #778984; background: #f8faf9; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
-    th.priority, td.priority { width: 48px; text-align: center; }
-    th.endpoint { width: 38%; }
-    th.authentication { width: 45%; }
-    th.row-actions, td.row-actions { width: 56px; text-align: center; }
-    tr:last-child td { border-bottom: 0; }
-    tr[data-row]:hover td { background: #fbfdfc; }
-    tr.dragging { opacity: .42; }
+    .table-scroll { overflow-x: auto; padding: 0 10px 10px; background: #f7faf8; }
+    table { width: 100%; min-width: 980px; border-collapse: separate; border-spacing: 0 8px; table-layout: fixed; }
+    th, td { padding: 12px 14px; text-align: left; vertical-align: middle; }
+    th { padding-block: 5px 7px; color: #778984; background: transparent; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+    th.priority, td.priority { width: 76px; text-align: center; white-space: nowrap; }
+    th.name { width: 14%; }
+    th.endpoint { width: 27%; }
+    th.authentication { width: 24%; }
+    th.app-selectors { width: 18%; }
+    th.row-actions, td.row-actions { width: 96px; text-align: center; white-space: nowrap; }
+    td.row-actions .icon-button + .icon-button { margin-left: 6px; }
+    tr[data-row] td { background: #fff; border-top: 1px solid #dce5e1; border-bottom: 1px solid #dce5e1; }
+    tr[data-row] td:first-child { border-left: 1px solid #dce5e1; border-radius: 6px 0 0 6px; }
+    tr[data-row] td:last-child { border-right: 1px solid #dce5e1; border-radius: 0 6px 6px 0; }
+    tr[data-row]:hover td { background: #fbfdfc; border-color: #bdcdc6; }
+    tr[data-row], .selector-row { transition: transform .18s ease, opacity .16s ease, border-color .16s ease, background .16s ease; }
+    tr.dragging, .selector-row.dragging { opacity: .34; filter: saturate(.65); }
     .drag-handle { display: inline-grid; width: 28px; height: 32px; place-items: center; color: #91a29d; cursor: grab; user-select: none; }
     .drag-handle svg { width: 16px; height: 16px; }
     .field-input, .auth-select { width: 100%; height: 34px; min-width: 0; padding: 6px 8px; color: #203330; background: transparent; border: 1px solid transparent; border-radius: 4px; }
@@ -82,6 +96,33 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .auth-select { color: #30564d; font-size: 13px; font-weight: 600; }
     .auth-value { min-width: 0; }
     .auth-value .field-input { width: 100%; }
+    .selector-table-head { display: grid; grid-template-columns: 190px minmax(0, 1fr) 160px; gap: 12px; padding: 9px 20px 7px; color: #778984; background: #f7faf8; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .selector-list { display: grid; gap: 8px; padding: 10px; background: #f7faf8; }
+    .selector-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 160px; gap: 12px; align-items: start; padding: 12px; background: #fff; border: 1px solid #dce5e1; border-radius: 6px; }
+    .selector-row:hover { border-color: #bdcdc6; background: #fbfdfc; }
+    .selector-name-cell { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 5px; align-items: center; }
+    .selector-matches { display: grid; gap: 6px; min-width: 0; min-height: 48px; padding: 6px; background: #f7faf8; border: 1px solid #d5e0db; border-radius: 5px; }
+    .selector-match { display: grid; grid-template-columns: minmax(120px, .9fr) 104px minmax(120px, 1.2fr) 34px; gap: 6px; align-items: center; }
+    .match-value-field { position: relative; min-width: 0; }
+    .match-value-field .field-input { padding-right: 66px; }
+    .match-value-actions { position: absolute; top: 3px; right: 3px; display: flex; align-items: center; }
+    .match-value-actions .icon-button { width: 28px; height: 28px; border: 0; background: transparent; }
+    .match-value-actions .rule-clear { color: #9e3e3e; }
+    .match-value-actions .rule-clear:hover { color: #862f2f; background: #fff1f0; }
+    .match-case-toggle.is-active { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    .selector-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .text-button { display: inline-flex; height: 34px; align-items: center; gap: 5px; padding: 0 4px; color: #327662; background: transparent; border: 0; cursor: pointer; font-size: 11px; font-weight: 700; }
+    .text-button svg { width: 14px; height: 14px; }
+    .selector-no-rules { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px 0 6px; color: #7b8b87; font-size: 12px; }
+    .selector-empty { grid-column: 1 / -1; padding: 22px; color: #7b8b87; background: #fff; border: 1px dashed #c9d6d1; border-radius: 6px; font-size: 12px; text-align: center; }
+    .drop-indicator td { height: 42px; padding: 0; background: transparent; border: 0; }
+    .drop-indicator span { display: grid; height: 30px; place-items: center; color: #3f8b73; background: rgba(92, 165, 137, .08); border: 1px dashed #70a996; border-radius: 5px; font-size: 11px; font-weight: 700; }
+    .selector-list > .drop-indicator { display: grid; height: 38px; place-items: center; color: #3f8b73; background: rgba(92, 165, 137, .08); border: 1px dashed #70a996; border-radius: 5px; font-size: 11px; font-weight: 700; }
+    .drag-ghost { position: fixed; top: -200px; left: -200px; z-index: 10; padding: 8px 12px; color: #e9f3ef; background: #1c332d; border: 1px solid #6aa18e; border-radius: 5px; box-shadow: 0 10px 22px rgba(0, 0, 0, .22); font-size: 12px; font-weight: 700; pointer-events: none; }
+    .reorder-settled { animation: reorder-settle .54s ease; }
+    tr.reorder-settled td { animation: reorder-settle-cell .54s ease; }
+    @keyframes reorder-settle { 0% { border-color: #8fcf6e; box-shadow: 0 0 0 0 rgba(143, 207, 110, .38); } 100% { border-color: inherit; box-shadow: 0 0 0 10px rgba(143, 207, 110, 0); } }
+    @keyframes reorder-settle-cell { 0% { background: #233b31; border-color: #8fcf6e; } 100% { background: inherit; border-color: inherit; } }
     .logs { margin-top: 20px; overflow: hidden; background: #13211f; border: 1px solid #29433e; border-radius: 8px; }
     .logs-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; color: #dce9e5; border-bottom: 1px solid #29433e; }
     .logs-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 700; }
@@ -89,7 +130,123 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .logs-meta { color: #9db5ae; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     #log-stream { height: 250px; overflow: auto; padding: 14px; margin: 0; color: #c6d8d2; background: #13211f; white-space: pre-wrap; word-break: break-word; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     #log-stream::selection { color: #13211f; background: #cbe86b; }
-    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .logs { margin-top: 12px; } }
+    .telemetry { margin-top: 20px; overflow: hidden; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .04); }
+    .telemetry-tabbar { display: flex; align-items: end; gap: 3px; padding: 10px 12px 0; background: #e9efec; border-bottom: 1px solid #d7e0dc; }
+    .telemetry-tab { display: inline-flex; min-height: 35px; align-items: center; gap: 7px; padding: 0 12px; margin-bottom: -1px; color: #60736d; background: transparent; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .telemetry-tab:hover { color: #2e5b51; background: rgba(255, 255, 255, .46); }
+    .telemetry-tab[aria-selected="true"] { color: #173d34; background: #fff; border-color: #d7e0dc; box-shadow: 0 -1px 2px rgba(21, 47, 40, .06); }
+    .telemetry-tab:focus-visible { outline: 2px solid #62a58d; outline-offset: 1px; }
+    .telemetry-panel[hidden] { display: none; }
+    .tab-connection { color: #7c918a; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .session-journal { margin-top: 20px; overflow: hidden; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .04); }
+    .journal-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #e5ece9; }
+    .journal-title { margin: 0; color: #213633; font-size: 15px; font-weight: 700; }
+    .journal-note { margin: 3px 0 0; color: #71827e; font-size: 12px; }
+    .session-list { display: grid; gap: 8px; padding: 10px; background: #f7faf8; }
+    .session-card { overflow: hidden; background: #fff; border: 1px solid #dce5e1; border-radius: 6px; }
+    .session-summary { display: grid; width: 100%; grid-template-columns: 8px minmax(240px, 1fr) auto 74px 104px 104px 18px; align-items: center; gap: 12px; padding: 12px 14px; color: #233834; background: #fff; border: 0; cursor: pointer; text-align: left; }
+    .session-summary:hover { background: #fbfdfc; }
+    .session-summary:focus-visible { outline: 2px solid #62a58d; outline-offset: -2px; }
+    .session-indicator { width: 8px; height: 8px; border-radius: 50%; }
+    .session-primary { display: grid; gap: 3px; min-width: 0; }
+    .session-path { overflow: hidden; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-path b { color: #18755f; font-weight: 800; }
+    .session-id { color: #7b8b87; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .session-route { overflow: hidden; color: #327662; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-state { justify-self: start; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .session-metric { display: grid; gap: 2px; text-align: right; }
+    .session-metric small, .session-overview small { color: #82928e; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+    .session-metric strong, .session-overview strong { color: #314743; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .session-chevron { width: 16px; height: 16px; color: #8b9a96; transition: transform .16s ease; }
+    .session-card.expanded .session-chevron { transform: rotate(180deg); }
+    .session-details { padding: 0 14px 14px; border-top: 1px solid #e8eeeb; background: #fbfdfc; }
+    .session-overview { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; padding: 12px 0; border-bottom: 1px solid #e7eeea; }
+    .session-overview span { display: grid; gap: 3px; }
+    .payload-preview { margin: 12px 0 0; overflow: hidden; border: 1px solid #dce7e2; border-radius: 5px; background: #12211e; }
+    .payload-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; color: #b8ccc5; border-bottom: 1px solid #29423c; }
+    .payload-preview-head h3 { margin: 0; color: #dceae5; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+    .payload-preview-head span { overflow: hidden; color: #8eaaa1; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-preview pre { max-height: 300px; padding: 11px; margin: 0; overflow: auto; color: #cae0d8; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .request-preview { border-color: #365d50; }
+    .request-preview .payload-preview-head { background: #162a24; }
+    .session-detail-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, .9fr); gap: 18px; padding-top: 12px; }
+    .session-detail-grid h3 { margin: 0 0 8px; color: #647773; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+    .header-list { max-height: 190px; padding: 0; margin: 0; overflow: auto; }
+    .header-list div { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 10px; padding: 5px 0; border-bottom: 1px solid #edf2ef; }
+    .header-list dt { color: #6d807a; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .header-list dd { margin: 0; overflow-wrap: anywhere; color: #314641; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .request-list { padding: 0; margin: 0; list-style: none; }
+    .request-list li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #edf2ef; color: #30443f; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .request-list li span:last-child { color: #748681; white-space: nowrap; }
+    .gateway-events { display: grid; gap: 0; max-height: 190px; padding: 0; margin: 0; overflow: auto; list-style: none; }
+    .gateway-events li { display: grid; grid-template-columns: 58px 82px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-bottom: 1px solid #edf2ef; color: #334b45; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .gateway-events time { color: #82938e; }
+    .gateway-event-kind { color: #28765f; font-weight: 700; }
+    .gateway-events-empty { display: block !important; color: #778984 !important; }
+    .is-connecting { color: #9a6b1b; background: #fff5d8; }
+    .session-indicator.is-connecting { background: #e6aa42; }
+    .is-streaming { color: #21745f; background: #e3f5e9; }
+    .session-indicator.is-streaming { background: #53a97f; box-shadow: 0 0 0 3px rgba(83, 169, 127, .12); }
+    .is-completed { color: #506560; background: #edf2f0; }
+    .session-indicator.is-completed { background: #9aa9a5; }
+    .is-warning { color: #98691c; background: #fff4d8; }
+    .session-indicator.is-warning { background: #e1a843; }
+    .is-error { color: #a33e3e; background: #fff0ef; }
+    .session-indicator.is-error { background: #d66a66; }
+    .session-empty { padding: 28px; color: #7b8b87; font-size: 13px; text-align: center; }
+    :root[data-theme="dark"] body { color: #dbe7e2; background: #0d1513; }
+    :root[data-theme="dark"] .appbar { background: #112522; border-color: #294740; }
+    :root[data-theme="dark"] .workspace, :root[data-theme="dark"] .telemetry { background: #14201d; border-color: #2b403a; box-shadow: 0 14px 30px rgba(0, 0, 0, .2); }
+    :root[data-theme="dark"] .workspace-top { border-color: #293d38; }
+    :root[data-theme="dark"] .section-title { color: #e3ede9; }
+    :root[data-theme="dark"] .section-note, :root[data-theme="dark"] .summary { color: #8fa59e; }
+    :root[data-theme="dark"] .icon-button { color: #b4c8c1; background: #1b2b27; border-color: #395047; }
+    :root[data-theme="dark"] .icon-button:hover { color: #d4e8df; background: #253a34; border-color: #638d7f; }
+    :root[data-theme="dark"] .icon-button.save { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    :root[data-theme="dark"] .icon-button.danger { color: #efa6a2; }
+    :root[data-theme="dark"] .icon-button.danger:hover { color: #ffd0cc; background: #432728; border-color: #8b5551; }
+    :root[data-theme="dark"] #status { color: #a9bbb5; }
+    :root[data-theme="dark"] .table-scroll, :root[data-theme="dark"] .selector-list { background: #101a17; }
+    :root[data-theme="dark"] th { color: #94aaa2; background: transparent; }
+    :root[data-theme="dark"] th, :root[data-theme="dark"] td, :root[data-theme="dark"] .header-list div, :root[data-theme="dark"] .request-list li { border-color: #293d38; }
+    :root[data-theme="dark"] tr[data-row] td { background: #172622; border-color: #30463f; }
+    :root[data-theme="dark"] tr[data-row]:hover td, :root[data-theme="dark"] .session-summary:hover { background: #1a2a26; }
+    :root[data-theme="dark"] .field-input, :root[data-theme="dark"] .auth-select { color: #dce9e4; }
+    :root[data-theme="dark"] .field-input:hover, :root[data-theme="dark"] .auth-select:hover, :root[data-theme="dark"] .field-input:focus, :root[data-theme="dark"] .auth-select:focus { background: #1d302b; border-color: #527b6d; }
+    :root[data-theme="dark"] .auth-select { color: #bbddd0; }
+    :root[data-theme="dark"] .drag-handle { color: #78928a; }
+    :root[data-theme="dark"] .telemetry-tabbar { background: #0e1916; border-color: #2b403a; }
+    :root[data-theme="dark"] .telemetry-tab { color: #8ea69e; }
+    :root[data-theme="dark"] .telemetry-tab:hover { color: #d2e3dc; background: #172923; }
+    :root[data-theme="dark"] .telemetry-tab[aria-selected="true"] { color: #e7f0ec; background: #14201d; border-color: #2b403a; box-shadow: none; }
+    :root[data-theme="dark"] .tab-connection { color: #78958a; }
+    :root[data-theme="dark"] .selector-workspace { border-color: #2b403a; }
+    :root[data-theme="dark"] .selector-table-head { color: #94aaa2; background: #101a17; }
+    :root[data-theme="dark"] .selector-row { background: #172622; border-color: #30463f; }
+    :root[data-theme="dark"] .selector-row:hover { background: #1a2a26; }
+    :root[data-theme="dark"] .selector-empty { color: #8ba198; background: #172622; border-color: #405750; }
+    :root[data-theme="dark"] .selector-matches { background: #101a17; border-color: #30463f; }
+    :root[data-theme="dark"] .selector-no-rules { color: #8ba198; }
+    :root[data-theme="dark"] .match-value-actions .rule-clear { color: #efa6a2; }
+    :root[data-theme="dark"] .match-value-actions .rule-clear:hover { color: #ffd0cc; background: #432728; }
+    :root[data-theme="dark"] .text-button { color: #8bc7a9; }
+    :root[data-theme="dark"] .match-case-toggle.is-active { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    :root[data-theme="dark"] .session-list { background: #101a17; }
+    :root[data-theme="dark"] .session-card, :root[data-theme="dark"] .session-summary { background: #172622; border-color: #30463f; color: #dce9e4; }
+    :root[data-theme="dark"] .session-details { background: #13201c; border-color: #2a3f38; }
+    :root[data-theme="dark"] .session-path b { color: #79c9a7; }
+    :root[data-theme="dark"] .session-id, :root[data-theme="dark"] .session-metric small, :root[data-theme="dark"] .session-overview small { color: #879e96; }
+    :root[data-theme="dark"] .session-route { color: #8bc7a9; }
+    :root[data-theme="dark"] .session-metric strong, :root[data-theme="dark"] .session-overview strong, :root[data-theme="dark"] .header-list dd, :root[data-theme="dark"] .request-list { color: #d1dfd9; }
+    :root[data-theme="dark"] .session-detail-grid h3, :root[data-theme="dark"] .header-list dt, :root[data-theme="dark"] .gateway-events time { color: #93aaa1; }
+    :root[data-theme="dark"] .gateway-events li { color: #c9d8d1; border-color: #293d38; }
+    :root[data-theme="dark"] .gateway-event-kind { color: #7fcaab; }
+    :root[data-theme="dark"] .is-completed { color: #b5c6c0; background: #263734; }
+    :root[data-theme="dark"] .is-warning { color: #f0c466; background: #453719; }
+    :root[data-theme="dark"] .is-error { color: #f3aaa6; background: #48292a; }
+    :root[data-theme="dark"] .session-empty { color: #8ba198; }
+    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-workspace { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .selector-match { grid-template-columns: minmax(100px, 1fr) 96px minmax(100px, 1.2fr) 34px; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .session-detail-grid { grid-template-columns: 1fr; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
+    @media (max-width: 760px) { .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr); } }
   </style>
 </head>
 <body>
@@ -105,69 +262,139 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
           <span class="switch"></span><span>Debug headers</span>
         </label>
         <span id="status" aria-live="polite"></span>
+        <button class="icon-button" type="button" id="theme-toggle" title="切换到浅色主题" aria-label="切换到浅色主题"><i data-lucide="sun"></i></button>
         <button class="icon-button" type="button" title="刷新配置" aria-label="刷新配置" hx-get="/config" hx-target="#config-table" hx-swap="innerHTML"><i data-lucide="refresh-cw"></i></button>
-        <button class="icon-button" type="button" id="add-upstream" title="新增上游" aria-label="新增上游"><i data-lucide="plus"></i></button>
         <button class="icon-button save" type="button" id="save" title="保存配置" aria-label="保存配置"><i data-lucide="save"></i></button>
       </div>
     </header>
     <section class="workspace" aria-labelledby="routing-title">
       <div class="workspace-top">
         <div><h2 class="section-title" id="routing-title">Upstream routing</h2><p class="section-note">按显示顺序重试，拖动行可调整优先级</p></div>
-        <div class="summary"><span class="summary-dot"></span><span id="upstream-count">加载中</span></div>
+        <div class="section-actions"><div class="summary"><span class="summary-dot"></span><span id="upstream-count">加载中</span></div><button class="icon-button" type="button" id="add-upstream" title="新增上游" aria-label="新增上游"><i data-lucide="plus"></i></button></div>
       </div>
       <div class="table-scroll">
         <table>
-          <thead><tr><th class="priority" scope="col">优先级</th><th class="endpoint" scope="col">Upstream endpoint</th><th class="authentication" scope="col">Authentication</th><th class="row-actions" scope="col"><span class="sr-only">操作</span></th></tr></thead>
-          <tbody id="config-table" hx-get="/config" hx-trigger="load" hx-swap="innerHTML"><tr><td colspan="4">正在加载上游配置...</td></tr></tbody>
+          <thead><tr><th class="priority" scope="col">优先级</th><th class="name" scope="col">Name</th><th class="endpoint" scope="col">Upstream endpoint</th><th class="authentication" scope="col">Authentication</th><th class="app-selectors" scope="col">Compatible AppSelectors</th><th class="row-actions" scope="col">Actions</th></tr></thead>
+          <tbody id="config-table" data-drop-zone hx-get="/config" hx-trigger="load" hx-swap="innerHTML"><tr><td colspan="6">正在加载上游配置...</td></tr></tbody>
         </table>
       </div>
     </section>
-    <section class="logs" aria-labelledby="logs-title">
-      <div class="logs-top"><h2 class="logs-title" id="logs-title"><span class="live-dot"></span>Live request feed</h2><span class="logs-meta">SSE connected</span></div>
-      <pre id="log-stream" hx-ext="sse" sse-connect="/logs" sse-swap="message" hx-swap="beforeend"></pre>
+    <section class="workspace selector-workspace" aria-labelledby="selector-config-title">
+      <div class="workspace-top">
+        <div><h2 class="section-title" id="selector-config-title">AppSelector registry</h2><p class="section-note">按顺序匹配已有 request header；首个命中的 selector 决定后续 upstream retry 链。</p></div>
+        <div class="section-actions"><div class="summary"><span class="summary-dot"></span><span id="selector-count">加载中</span></div><button class="icon-button" type="button" id="add-selector" title="新增 AppSelector" aria-label="新增 AppSelector"><i data-lucide="plus"></i></button></div>
+      </div>
+      <div class="selector-table-head" role="row"><span>AppSelector</span><span>Header match rules</span><span>Actions</span></div>
+      <div id="selector-list" class="selector-list" data-drop-zone>
+        {{range .AppSelectors}}<div class="selector-row" data-selector data-draggable draggable="true"><div class="selector-name-cell"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span><input class="field-input" data-selector-name value="{{.Name}}" placeholder="selector name" aria-label="AppSelector 名称"></div><div class="selector-matches" data-selector-matches>{{range .Match.Headers}}<div class="selector-match" data-selector-match data-case-sensitive="{{.CaseSensitive}}"><input class="field-input" data-match-header value="{{.Name}}" placeholder="User-Agent" aria-label="匹配 header"><select class="auth-select" data-match-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-match-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button><button class="icon-button rule-clear" type="button" data-delete-match title="删除 header 条件" aria-label="删除 header 条件"><i data-lucide="x"></i></button></span></span><button class="icon-button" type="button" data-add-match title="新增 header 条件" aria-label="新增 header 条件"><i data-lucide="plus"></i></button></div>{{else}}<div class="selector-no-rules"><span>No rules - matches all requests</span><button class="icon-button" type="button" data-add-match title="新增 header 条件" aria-label="新增 header 条件"><i data-lucide="plus"></i></button></div>{{end}}</div><div class="selector-actions"><button class="icon-button danger" type="button" data-delete-selector title="删除 AppSelector" aria-label="删除 AppSelector"><i data-lucide="trash-2"></i></button></div></div>{{else}}<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>{{end}}
+      </div>
+    </section>
+    <section class="telemetry" aria-labelledby="telemetry-title">
+      <h2 class="sr-only" id="telemetry-title">Telemetry</h2>
+      <div class="telemetry-tabbar" role="tablist" aria-label="观测视图"><button class="telemetry-tab" type="button" role="tab" id="sessions-tab" aria-selected="true" aria-controls="sessions-panel" data-telemetry-tab="sessions">Session journal</button><button class="telemetry-tab" type="button" role="tab" id="logs-tab" aria-selected="false" aria-controls="logs-panel" data-telemetry-tab="logs"><span class="live-dot"></span><span>Live request feed</span><span class="tab-connection">SSE connected</span></button></div>
+      <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab"><div id="session-list" class="session-list" hx-get="/sessions" hx-trigger="load" hx-swap="innerHTML" hx-ext="sse" sse-connect="/sessions/stream" sse-swap="sessions"></div></div>
+      <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><pre id="log-stream" hx-ext="sse" sse-connect="/logs" sse-swap="message" hx-swap="beforeend"></pre></div>
     </section>
   </main>
   <script>
     const table = document.getElementById('config-table');
+    const selectorList = document.getElementById('selector-list');
     const status = document.getElementById('status');
     const saveButton = document.getElementById('save');
-    let dragged;
+    const themeToggle = document.getElementById('theme-toggle');
+    const sessionList = document.getElementById('session-list');
+    const expandedSessions = new Set();
+    const requestPayloadCache = new Map();
+    let dragged, dragContainer, dropIndicator, dragGhost;
     function renderIcons(scope) { if (window.lucide) window.lucide.createIcons({root: scope || document, attrs: {'stroke-width': 1.8}}); }
+    function setTheme(theme) { document.documentElement.dataset.theme = theme; try { localStorage.setItem('agw-theme', theme); } catch (_) {} const isDark = theme === 'dark'; themeToggle.title = isDark ? '切换到浅色主题' : '切换到深色主题'; themeToggle.setAttribute('aria-label', themeToggle.title); themeToggle.innerHTML = '<i data-lucide="' + (isDark ? 'sun' : 'moon') + '"></i>'; renderIcons(themeToggle); }
+    function setTelemetryView(view, focus) { document.querySelectorAll('[data-telemetry-tab]').forEach(tab => { const active = tab.dataset.telemetryTab === view; tab.setAttribute('aria-selected', String(active)); document.getElementById(tab.getAttribute('aria-controls')).hidden = !active; if (active && focus) tab.focus(); }); }
+    async function hydrateSessionPayloads(card) { const sessionID = card.dataset.sessionId; for (const target of card.querySelectorAll('[data-session-payload]')) { const kind = target.dataset.sessionPayload; const cacheKey = sessionID + ':' + kind; if (kind === 'request' && requestPayloadCache.has(cacheKey)) { target.textContent = requestPayloadCache.get(cacheKey); continue; } try { const response = await fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind); if (!response.ok) continue; const payload = await response.text(); target.textContent = payload; if (kind === 'request') requestPayloadCache.set(cacheKey, payload); } catch (_) {} } }
+    function setSessionExpanded(card, expanded) { const details = card.querySelector('.session-details'); card.querySelector('[data-session-toggle]').setAttribute('aria-expanded', String(expanded)); details.hidden = !expanded; card.classList.toggle('expanded', expanded); if (expanded) { expandedSessions.add(card.dataset.sessionId); hydrateSessionPayloads(card); } else { expandedSessions.delete(card.dataset.sessionId); requestPayloadCache.delete(card.dataset.sessionId + ':request'); } }
     function updateSummary() { document.getElementById('upstream-count').textContent = table.querySelectorAll('tr[data-row]').length + ' upstreams'; }
-    function newRow() { return '<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-url value="https://example.com/v1" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none" selected>none</option><option value="basic">basic</option><option value="bearer">bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>'; }
-    document.addEventListener('dragstart', function (event) { const row = event.target.closest('tr[data-row]'); if (!row) return; dragged = row; row.classList.add('dragging'); });
-    document.addEventListener('dragend', function () { if (dragged) dragged.classList.remove('dragging'); dragged = null; });
-    document.addEventListener('dragover', function (event) { const row = event.target.closest('tr[data-row]'); if (!dragged || !row || row === dragged) return; event.preventDefault(); const box = row.getBoundingClientRect(); row.parentNode.insertBefore(dragged, event.clientY < box.top + box.height / 2 ? row : row.nextSibling); });
+    function updateSelectorSummary() { document.getElementById('selector-count').textContent = selectorList.querySelectorAll('[data-selector]').length + ' selectors'; }
+    function ensureDuplicateButtons(scope) { scope.querySelectorAll('tr[data-row]').forEach(row => { const actions = row.querySelector('.row-actions'); if (!actions || actions.querySelector('[data-duplicate-row]')) return; const remove = actions.querySelector('[data-delete-row]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-row title="复制 upstream" aria-label="复制 upstream"><i data-lucide="copy"></i></button>'); }); scope.querySelectorAll('[data-selector]').forEach(row => { const actions = row.querySelector('.selector-actions'); if (!actions || actions.querySelector('[data-duplicate-selector]')) return; const remove = actions.querySelector('[data-delete-selector]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-selector title="复制 AppSelector" aria-label="复制 AppSelector"><i data-lucide="copy"></i></button>'); }); }
+    function newRow() { return '<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="https://example.com/v1" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none" selected>none</option><option value="basic">basic</option><option value="bearer">bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td><input class="field-input" data-app-selectors value="" placeholder="codex, default" aria-label="兼容的 AppSelector"></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>'; }
+    function selectorNoRules() { return '<div class="selector-no-rules"><span>No rules - matches all requests</span><button class="icon-button" type="button" data-add-match title="新增 header 条件" aria-label="新增 header 条件"><i data-lucide="plus"></i></button></div>'; }
+    function selectorMatchRow() { return '<div class="selector-match" data-selector-match data-case-sensitive="false"><input class="field-input" data-match-header value="" placeholder="User-Agent" aria-label="匹配 header"><select class="auth-select" data-match-operator aria-label="匹配方式"><option value="exact" selected>exact</option><option value="prefix">prefix</option><option value="contains">contains</option><option value="regex">regex</option><option value="present">present</option></select><span class="match-value-field"><input class="field-input" data-match-value value="" placeholder="匹配值" aria-label="匹配值"><span class="match-value-actions"><button class="icon-button match-case-toggle" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="false"><i data-lucide="case-sensitive"></i></button><button class="icon-button rule-clear" type="button" data-delete-match title="删除 header 条件" aria-label="删除 header 条件"><i data-lucide="x"></i></button></span></span><button class="icon-button" type="button" data-add-match title="新增 header 条件" aria-label="新增 header 条件"><i data-lucide="plus"></i></button></div>'; }
+    function selectorRow() { return '<div class="selector-row" data-selector data-draggable draggable="true"><div class="selector-name-cell"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span><input class="field-input" data-selector-name value="" placeholder="selector name" aria-label="AppSelector 名称"></div><div class="selector-matches" data-selector-matches>' + selectorNoRules() + '</div><div class="selector-actions"><button class="icon-button danger" type="button" data-delete-selector title="删除 AppSelector" aria-label="删除 AppSelector"><i data-lucide="trash-2"></i></button></div></div>'; }
+    function syncMatchValue(match) { const present = match.querySelector('[data-match-operator]').value === 'present'; const value = match.querySelector('[data-match-value]'); value.disabled = present; if (present) value.value = ''; }
+    function draggableRows(container) { return [...container.children].filter(node => node.matches && node.matches('[data-draggable], tr[data-row]')); }
+    function createDropIndicator() { const indicator = document.createElement(dragged.tagName === 'TR' ? 'tr' : 'div'); indicator.className = 'drop-indicator'; if (dragged.tagName === 'TR') { const cell = document.createElement('td'); cell.colSpan = 6; const label = document.createElement('span'); label.textContent = '松手后放到这里'; cell.append(label); indicator.append(cell); } else { indicator.textContent = '松手后放到这里'; } return indicator; }
+    function clearDropPreview() { if (dropIndicator) dropIndicator.remove(); dropIndicator = null; if (dragGhost) dragGhost.remove(); dragGhost = null; }
+    function capturePositions(container) { return new Map(draggableRows(container).map(row => [row, row.getBoundingClientRect().top])); }
+    function animateReorder(container, positions) { draggableRows(container).forEach(row => { const before = positions.get(row); const after = row.getBoundingClientRect().top; const offset = before == null ? 0 : before - after; if (offset) { row.style.transition = 'none'; row.style.transform = 'translateY(' + offset + 'px)'; requestAnimationFrame(() => { row.style.transition = ''; row.style.transform = ''; }); } }); }
+    function placeDropIndicator(container, before) { if (!dropIndicator) dropIndicator = createDropIndicator(); container.insertBefore(dropIndicator, before); }
+    function makeDragGhost(event, row) { if (!event.dataTransfer) return; dragGhost = document.createElement('div'); dragGhost.className = 'drag-ghost'; dragGhost.textContent = row.tagName === 'TR' ? '移动 upstream' : '移动 AppSelector'; document.body.append(dragGhost); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', 'agw-reorder'); event.dataTransfer.setDragImage(dragGhost, 18, 16); }
+    document.addEventListener('dragstart', function (event) { const row = event.target.closest('[data-draggable], tr[data-row]'); if (!row || event.target.closest('input, select, button, label')) { event.preventDefault(); return; } dragged = row; dragContainer = row.parentNode; row.classList.add('dragging'); makeDragGhost(event, row); });
+    document.addEventListener('dragover', function (event) { if (!dragged) return; const row = event.target.closest('[data-draggable], tr[data-row]'); const zone = event.target.closest('[data-drop-zone]'); const container = row ? row.parentNode : zone; if (!container || container !== dragContainer) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; if (event.target.closest('.drop-indicator')) return; if (!row || row === dragged) { const rows = draggableRows(container).filter(item => item !== dragged); placeDropIndicator(container, rows.length ? rows[rows.length - 1].nextSibling : null); return; } const box = row.getBoundingClientRect(); placeDropIndicator(container, event.clientY < box.top + box.height / 2 ? row : row.nextSibling); });
+    document.addEventListener('drop', function (event) { const zone = event.target.closest('[data-drop-zone]'); if (!dragged || !zone || zone !== dragContainer || !dropIndicator) return; event.preventDefault(); const positions = capturePositions(dragContainer); dragContainer.insertBefore(dragged, dropIndicator); dropIndicator.remove(); dropIndicator = null; animateReorder(dragContainer, positions); dragged.classList.remove('dragging'); dragged.classList.add('reorder-settled'); setTimeout(() => dragged && dragged.classList.remove('reorder-settled'), 560); });
+    document.addEventListener('dragend', function () { if (dragged) dragged.classList.remove('dragging'); clearDropPreview(); dragged = null; dragContainer = null; });
+    document.addEventListener('change', function (event) { const operator = event.target.closest('[data-match-operator]'); if (operator) syncMatchValue(operator.closest('[data-selector-match]')); });
     saveButton.addEventListener('click', async function () {
-      const upstreams = [...table.querySelectorAll('tr[data-row]')].map(row => ({url: row.querySelector('[data-url]').value.trim(), authorization: {type: row.querySelector('[data-auth-type]').value, value: row.querySelector('[data-auth-value]').value}}));
+      const upstreams = [...table.querySelectorAll('tr[data-row]')].map(row => ({name: row.querySelector('[data-name]').value.trim(), url: row.querySelector('[data-url]').value.trim(), appSelectors: row.querySelector('[data-app-selectors]').value.split(',').map(value => value.trim()).filter(Boolean), authorization: {type: row.querySelector('[data-auth-type]').value, value: row.querySelector('[data-auth-value]').value}}));
+      const appSelectors = [...document.querySelectorAll('[data-selector]')].map(row => ({name: row.querySelector('[data-selector-name]').value.trim(), match: {headers: [...row.querySelectorAll('[data-selector-match]')].map(match => ({name: match.querySelector('[data-match-header]').value.trim(), operator: match.querySelector('[data-match-operator]').value, value: match.querySelector('[data-match-value]').value, caseSensitive: match.dataset.caseSensitive === 'true'}))}}));
       status.className = ''; status.textContent = '保存中'; saveButton.disabled = true;
       try {
-        const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: document.getElementById('debug-toggle').checked, upstreams})});
+        const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: document.getElementById('debug-toggle').checked, appSelectors, upstreams})});
         if (!response.ok) throw new Error(await response.text());
         status.className = 'success'; status.textContent = '已保存'; htmx.trigger(table, 'load');
       } catch (error) { status.className = 'error'; status.textContent = error.message || '保存失败'; }
       finally { saveButton.disabled = false; }
     });
-    document.getElementById('add-upstream').addEventListener('click', function () { table.insertAdjacentHTML('beforeend', newRow()); renderIcons(table); updateSummary(); });
+    document.getElementById('add-upstream').addEventListener('click', function () { table.insertAdjacentHTML('beforeend', newRow()); ensureDuplicateButtons(table); renderIcons(table); updateSummary(); });
+    document.getElementById('add-selector').addEventListener('click', function () { const empty = selectorList.querySelector('.selector-empty'); if (empty) empty.remove(); selectorList.insertAdjacentHTML('beforeend', selectorRow()); ensureDuplicateButtons(selectorList); renderIcons(selectorList); updateSelectorSummary(); });
+    themeToggle.addEventListener('click', function () { setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
     document.addEventListener('click', function (event) {
+      const telemetryTab = event.target.closest('[data-telemetry-tab]');
+      if (telemetryTab) { setTelemetryView(telemetryTab.dataset.telemetryTab); return; }
       const toggle = event.target.closest('[data-toggle-password]');
       if (toggle) { const value = toggle.parentElement.querySelector('[data-auth-value]'); const visible = value.type === 'text'; value.type = visible ? 'password' : 'text'; toggle.title = visible ? '显示认证值' : '隐藏认证值'; toggle.setAttribute('aria-label', toggle.title); toggle.innerHTML = '<i data-lucide="' + (visible ? 'eye' : 'eye-off') + '"></i>'; renderIcons(toggle); return; }
+      const caseToggle = event.target.closest('[data-toggle-case]');
+      if (caseToggle) { const match = caseToggle.closest('[data-selector-match]'); const enabled = match.dataset.caseSensitive !== 'true'; match.dataset.caseSensitive = String(enabled); caseToggle.classList.toggle('is-active', enabled); caseToggle.setAttribute('aria-pressed', String(enabled)); caseToggle.title = enabled ? '区分大小写：开' : '区分大小写：关'; caseToggle.setAttribute('aria-label', caseToggle.title); return; }
       const remove = event.target.closest('[data-delete-row]');
       if (remove) { remove.closest('tr[data-row]').remove(); updateSummary(); }
+      const duplicateRow = event.target.closest('[data-duplicate-row]');
+      if (duplicateRow) { const row = duplicateRow.closest('tr[data-row]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderIcons(clone); updateSummary(); return; }
+      const addMatch = event.target.closest('[data-add-match]');
+      if (addMatch) { const matches = addMatch.closest('[data-selector]').querySelector('[data-selector-matches]'); const empty = matches.querySelector('.selector-no-rules'); if (empty) empty.remove(); matches.insertAdjacentHTML('beforeend', selectorMatchRow()); renderIcons(matches); return; }
+      const deleteMatch = event.target.closest('[data-delete-match]');
+      if (deleteMatch) { const matches = deleteMatch.closest('[data-selector-matches]'); deleteMatch.closest('[data-selector-match]').remove(); if (!matches.querySelector('[data-selector-match]')) matches.insertAdjacentHTML('beforeend', selectorNoRules()); renderIcons(matches); return; }
+      const deleteSelector = event.target.closest('[data-delete-selector]');
+      if (deleteSelector) { deleteSelector.closest('[data-selector]').remove(); if (!selectorList.querySelector('[data-selector]')) selectorList.innerHTML = '<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>'; updateSelectorSummary(); }
+      const duplicateSelector = event.target.closest('[data-duplicate-selector]');
+      if (duplicateSelector) { const row = duplicateSelector.closest('[data-selector]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderIcons(clone); updateSelectorSummary(); return; }
     });
-    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { renderIcons(table); updateSummary(); } });
+    document.addEventListener('click', function (event) {
+      const toggle = event.target.closest('[data-session-toggle]');
+      if (!toggle) return;
+      const card = toggle.closest('.session-card'); setSessionExpanded(card, toggle.getAttribute('aria-expanded') !== 'true');
+    });
+    document.addEventListener('keydown', function (event) {
+      const current = event.target.closest('[data-telemetry-tab]');
+      if (!current || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const tabs = [...document.querySelectorAll('[data-telemetry-tab]')]; const index = tabs.indexOf(current); let next = index;
+      if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = tabs.length - 1;
+      event.preventDefault(); setTelemetryView(tabs[next].dataset.telemetryTab, true);
+    });
+    document.body.addEventListener('htmx:beforeSwap', function (event) { if (event.target !== sessionList) return; expandedSessions.clear(); sessionList.querySelectorAll('.session-card.expanded').forEach(card => expandedSessions.add(card.dataset.sessionId)); });
+    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderIcons(table); updateSummary(); } if (event.target === sessionList) { sessionList.querySelectorAll('.session-card').forEach(card => { if (expandedSessions.has(card.dataset.sessionId)) setSessionExpanded(card, true); }); renderIcons(sessionList); } });
     document.body.addEventListener('htmx:sseMessage', function () { const logs = document.getElementById('log-stream'); logs.scrollTop = logs.scrollHeight; });
-    renderIcons(document);
+    setTheme(document.documentElement.dataset.theme || 'dark');
+    updateSelectorSummary(); ensureDuplicateButtons(document); renderIcons(document);
   </script>
 </body>
 </html>`))
 
-var fragmentTemplate = template.Must(template.New("fragment").Parse(`{{range .}}<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-url value="{{.URL}}" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none"{{if eq .AuthType "none"}} selected{{end}}>none</option><option value="basic"{{if eq .AuthType "basic"}} selected{{end}}>basic</option><option value="bearer"{{if eq .AuthType "bearer"}} selected{{end}}>bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="{{.AuthValue}}" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>{{else}}<tr><td colspan="4">没有配置上游</td></tr>{{end}}`))
+var fragmentTemplate = template.Must(template.New("fragment").Parse(`{{range .}}<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="{{.Name}}" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="{{.URL}}" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none"{{if eq .AuthType "none"}} selected{{end}}>none</option><option value="basic"{{if eq .AuthType "basic"}} selected{{end}}>basic</option><option value="bearer"{{if eq .AuthType "bearer"}} selected{{end}}>bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="{{.AuthValue}}" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td><input class="field-input" data-app-selectors value="{{.AppSelectorsText}}" placeholder="codex, default" aria-label="兼容的 AppSelector"></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>{{else}}<tr><td colspan="6">没有配置上游</td></tr>{{end}}`))
 
 func configViews(upstreams []Upstream) []configView {
 	views := make([]configView, 0, len(upstreams))
 	for i, upstream := range upstreams {
-		view := configView{Index: i + 1, URL: upstream.URL}
+		view := configView{Index: i + 1, Name: upstream.Name, URL: upstream.URL, AppSelectorsText: strings.Join(upstream.AppSelectors, ", ")}
 		if upstream.Authorization != nil {
 			view.HasAuth = true
 			view.AuthType = upstream.Authorization.Type
@@ -178,9 +405,9 @@ func configViews(upstreams []Upstream) []configView {
 	return views
 }
 
-func serveConfigPage(w http.ResponseWriter, _ *http.Request, _ []Upstream, debug bool) {
+func serveConfigPage(w http.ResponseWriter, _ *http.Request, selectors []AppSelector, debug bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := pageTemplate.Execute(w, pageView{Debug: debug}); err != nil {
+	if err := pageTemplate.Execute(w, pageView{Debug: debug, AppSelectors: selectors}); err != nil {
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
