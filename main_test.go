@@ -552,6 +552,22 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 	}
 }
 
+func TestConfigFragmentRendersMultiSelectForAppSelectors(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveConfigFragment(recorder, []Upstream{
+		{Name: "primary", URL: "https://example.com/v1", AppSelectors: []string{"codex", "fallback"}},
+	})
+	content := recorder.Body.String()
+	for _, expected := range []string{"data-multi-select", "data-ms-trigger", "data-ms-menu", `value="codex, fallback"`} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config fragment missing %q", expected)
+		}
+	}
+	if strings.Contains(content, `placeholder="codex, default"`) {
+		t.Fatalf("config fragment still uses a free-text app selector input")
+	}
+}
+
 func TestWriteSessionSSERemovesCarriageReturns(t *testing.T) {
 	var output bytes.Buffer
 	if err := writeSessionSSE(&output, "first\r\nsecond"); err != nil {

@@ -96,6 +96,25 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .auth-select { color: #30564d; font-size: 13px; font-weight: 600; }
     .auth-value { min-width: 0; }
     .auth-value .field-input { width: 100%; }
+    .multi-select { position: relative; min-width: 0; }
+    .ms-trigger { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 8px; color: #203330; background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+    .ms-trigger:hover { background: #fff; border-color: #b8c9c3; }
+    .ms-trigger:focus-visible { background: #fff; border-color: #b8c9c3; outline: 2px solid #62a58d; outline-offset: 1px; }
+    .ms-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+    .ms-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 3px; padding: 2px 4px 2px 7px; color: #1c4a3d; background: #e5f1ec; border: 1px solid #bcd8cd; border-radius: 999px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .ms-chip.is-stale { color: #8a4a1d; background: #fdf0df; border-color: #e5c394; }
+    .ms-chip button { display: inline-grid; width: 15px; height: 15px; place-items: center; padding: 0; color: inherit; background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+    .ms-chip button:hover { background: rgba(0, 0, 0, .1); }
+    .ms-chip svg { width: 11px; height: 11px; }
+    .ms-placeholder { color: #97a7a2; font-size: 12px; white-space: nowrap; }
+    .ms-chevron { flex: 0 0 14px; width: 14px; height: 14px; color: #8b9a96; }
+    .ms-menu { position: fixed; z-index: 60; display: grid; gap: 2px; width: max-content; min-width: 240px; max-height: 260px; padding: 6px; overflow: auto; color: #203330; background: #fff; border: 1px solid #c8d4d0; border-radius: 6px; box-shadow: 0 14px 30px rgba(24, 44, 39, .16); }
+    .ms-menu[hidden] { display: none; }
+    .ms-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .ms-option:hover { background: #f0f6f3; }
+    .ms-option input { width: 15px; height: 15px; margin: 0; accent-color: #4d8f79; }
+    .ms-option.is-stale { color: #9a6b1b; }
+    .ms-empty { padding: 12px; color: #7b8b87; font-size: 12px; text-align: center; }
     .selector-table-head { display: grid; grid-template-columns: 190px minmax(0, 1fr) 160px; gap: 12px; padding: 9px 20px 7px; color: #778984; background: #f7faf8; font-size: 11px; font-weight: 700; text-transform: uppercase; }
     .selector-list { display: grid; gap: 8px; padding: 10px; background: #f7faf8; }
     .selector-row { display: grid; grid-template-columns: 190px minmax(0, 1fr) 160px; gap: 12px; align-items: start; padding: 12px; background: #fff; border: 1px solid #dce5e1; border-radius: 6px; }
@@ -214,6 +233,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .field-input, :root[data-theme="dark"] .auth-select { color: #dce9e4; }
     :root[data-theme="dark"] .field-input:hover, :root[data-theme="dark"] .auth-select:hover, :root[data-theme="dark"] .field-input:focus, :root[data-theme="dark"] .auth-select:focus { background: #1d302b; border-color: #527b6d; }
     :root[data-theme="dark"] .auth-select { color: #bbddd0; }
+    :root[data-theme="dark"] .ms-trigger { color: #dce9e4; }
+    :root[data-theme="dark"] .ms-trigger:hover, :root[data-theme="dark"] .ms-trigger:focus-visible { background: #1d302b; border-color: #527b6d; }
+    :root[data-theme="dark"] .ms-chip { color: #bfe3d2; background: #1d3a31; border-color: #3c6658; }
+    :root[data-theme="dark"] .ms-chip.is-stale { color: #f0c466; background: #453719; border-color: #7a5b20; }
+    :root[data-theme="dark"] .ms-placeholder { color: #78958a; }
+    :root[data-theme="dark"] .ms-chevron { color: #78958a; }
+    :root[data-theme="dark"] .ms-menu { color: #dce9e4; background: #172622; border-color: #395047; box-shadow: 0 16px 32px rgba(0, 0, 0, .45); }
+    :root[data-theme="dark"] .ms-option:hover { background: #1d302b; }
+    :root[data-theme="dark"] .ms-empty { color: #8ba198; }
     :root[data-theme="dark"] .drag-handle { color: #78928a; }
     :root[data-theme="dark"] .telemetry-tabbar { background: #0e1916; border-color: #2b403a; }
     :root[data-theme="dark"] .telemetry-tab { color: #8ea69e; }
@@ -314,7 +342,92 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     function updateSummary() { document.getElementById('upstream-count').textContent = table.querySelectorAll('tr[data-row]').length + ' upstreams'; }
     function updateSelectorSummary() { document.getElementById('selector-count').textContent = selectorList.querySelectorAll('[data-selector]').length + ' selectors'; }
     function ensureDuplicateButtons(scope) { scope.querySelectorAll('tr[data-row]').forEach(row => { const actions = row.querySelector('.row-actions'); if (!actions || actions.querySelector('[data-duplicate-row]')) return; const remove = actions.querySelector('[data-delete-row]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-row title="复制 upstream" aria-label="复制 upstream"><i data-lucide="copy"></i></button>'); }); scope.querySelectorAll('[data-selector]').forEach(row => { const actions = row.querySelector('.selector-actions'); if (!actions || actions.querySelector('[data-duplicate-selector]')) return; const remove = actions.querySelector('[data-delete-selector]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-selector title="复制 AppSelector" aria-label="复制 AppSelector"><i data-lucide="copy"></i></button>'); }); }
-    function newRow() { return '<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="https://example.com/v1" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none" selected>none</option><option value="basic">basic</option><option value="bearer">bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td><input class="field-input" data-app-selectors value="" placeholder="codex, default" aria-label="兼容的 AppSelector"></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>'; }
+    function newRow() { return '<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="https://example.com/v1" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none" selected>none</option><option value="basic">basic</option><option value="bearer">bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="app-selectors"><div class="multi-select" data-multi-select><input type="hidden" data-app-selectors value=""><div class="ms-trigger" data-ms-trigger role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="兼容的 AppSelector"><span class="ms-chips" data-ms-chips></span><i data-lucide="chevron-down" class="ms-chevron"></i></div><div class="ms-menu" data-ms-menu hidden role="listbox" aria-multiselectable="true"></div></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>'; }
+    function registeredSelectorNames() { return [...selectorList.querySelectorAll('[data-selector]')].map(row => row.querySelector('[data-selector-name]').value.trim()).filter(Boolean); }
+    function parseSelectorList(value) { return String(value || '').split(',').map(item => item.trim()).filter(Boolean); }
+    function setMultiSelectValue(ms, names) { ms.querySelector('[data-app-selectors]').value = [...new Set(names)].join(', '); renderMultiSelect(ms); }
+    function renderMultiSelect(scope) {
+      const roots = scope.matches && scope.matches('[data-multi-select]') ? [scope] : [...scope.querySelectorAll('[data-multi-select]')];
+      roots.forEach(function (ms) {
+        const hidden = ms.querySelector('[data-app-selectors]');
+        const chips = ms.querySelector('[data-ms-chips]');
+        const menu = ms.querySelector('[data-ms-menu]');
+        const trigger = ms.querySelector('[data-ms-trigger]');
+        const registered = registeredSelectorNames();
+        const selected = parseSelectorList(hidden.value);
+        const allNames = [...new Set(registered.concat(selected))];
+        menu.innerHTML = '';
+        if (!allNames.length) {
+          const empty = document.createElement('div');
+          empty.className = 'ms-empty';
+          empty.textContent = '暂无 AppSelector，请先在下方注册';
+          menu.append(empty);
+        }
+        allNames.forEach(function (name) {
+          const label = document.createElement('label');
+          label.className = 'ms-option' + (registered.includes(name) ? '' : ' is-stale');
+          label.title = registered.includes(name) ? '' : '该 AppSelector 已不存在';
+          const check = document.createElement('input');
+          check.type = 'checkbox';
+          check.dataset.msCheck = '';
+          check.value = name;
+          check.checked = selected.includes(name);
+          const span = document.createElement('span');
+          span.textContent = name;
+          label.append(check, span);
+          menu.append(label);
+        });
+        chips.innerHTML = '';
+        if (!selected.length) {
+          const placeholder = document.createElement('span');
+          placeholder.className = 'ms-placeholder';
+          placeholder.textContent = registered.length ? '未选择（不参与路由）' : '未选择';
+          chips.append(placeholder);
+        } else {
+          selected.forEach(function (name) {
+            const chip = document.createElement('span');
+            chip.className = 'ms-chip' + (registered.includes(name) ? '' : ' is-stale');
+            chip.dataset.msChip = name;
+            const text = document.createElement('span');
+            text.textContent = name;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.dataset.msRemove = '';
+            remove.title = '移除 ' + name;
+            remove.setAttribute('aria-label', '移除 ' + name);
+            remove.innerHTML = '<i data-lucide="x"></i>';
+            chip.append(text, remove);
+            chips.append(chip);
+          });
+        }
+        trigger.title = !selected.length && registered.length ? '未绑定任何 AppSelector：配置了 selector 时该上游不会参与路由' : '选择兼容的 AppSelector';
+        renderIcons(chips);
+      });
+    }
+    function openMultiSelect(ms) {
+      closeMultiSelects();
+      const trigger = ms.querySelector('[data-ms-trigger]');
+      const menu = ms.querySelector('[data-ms-menu]');
+      const rect = trigger.getBoundingClientRect();
+      menu.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+      const width = Math.min(Math.max(rect.width, 240), window.innerWidth - 16);
+      menu.style.width = width + 'px';
+      menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) + 'px';
+      menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+      menu.style.maxHeight = Math.max(120, Math.min(260, window.innerHeight - parseFloat(menu.style.top) - 12)) + 'px';
+    }
+    function closeMultiSelects() {
+      document.querySelectorAll('[data-multi-select]').forEach(function (ms) {
+        const menu = ms.querySelector('[data-ms-menu]');
+        ms.querySelector('[data-ms-trigger]').setAttribute('aria-expanded', 'false');
+        menu.hidden = true;
+        menu.style.width = '';
+        menu.style.left = '';
+        menu.style.top = '';
+        menu.style.maxHeight = '';
+      });
+    }
     function selectorNoRules() { return '<div class="selector-no-rules"><span>No rules - matches all requests</span><button class="icon-button" type="button" data-add-match title="新增 header 条件" aria-label="新增 header 条件"><i data-lucide="plus"></i></button></div>'; }
     function selectorMatchRow() { return '<div class="selector-match" data-selector-match data-case-sensitive="false"><input class="field-input" data-match-header value="" placeholder="User-Agent" aria-label="匹配 header"><select class="auth-select" data-match-operator aria-label="匹配方式"><option value="exact" selected>exact</option><option value="prefix">prefix</option><option value="contains">contains</option><option value="regex">regex</option><option value="present">present</option></select><span class="match-value-field"><input class="field-input" data-match-value value="" placeholder="匹配值" aria-label="匹配值"><span class="match-value-actions"><button class="icon-button match-case-toggle" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="false"><i data-lucide="case-sensitive"></i></button><button class="icon-button rule-clear" type="button" data-delete-match title="删除 header 条件" aria-label="删除 header 条件"><i data-lucide="x"></i></button></span></span><button class="icon-button" type="button" data-add-match title="新增 header 条件" aria-label="新增 header 条件"><i data-lucide="plus"></i></button></div>'; }
     function selectorRow() { return '<div class="selector-row" data-selector data-draggable draggable="true"><div class="selector-name-cell"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span><input class="field-input" data-selector-name value="" placeholder="selector name" aria-label="AppSelector 名称"></div><div class="selector-matches" data-selector-matches>' + selectorNoRules() + '</div><div class="selector-actions"><button class="icon-button danger" type="button" data-delete-selector title="删除 AppSelector" aria-label="删除 AppSelector"><i data-lucide="trash-2"></i></button></div></div>'; }
@@ -334,6 +447,13 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     saveButton.addEventListener('click', async function () {
       const upstreams = [...table.querySelectorAll('tr[data-row]')].map(row => ({name: row.querySelector('[data-name]').value.trim(), url: row.querySelector('[data-url]').value.trim(), appSelectors: row.querySelector('[data-app-selectors]').value.split(',').map(value => value.trim()).filter(Boolean), authorization: {type: row.querySelector('[data-auth-type]').value, value: row.querySelector('[data-auth-value]').value}}));
       const appSelectors = [...document.querySelectorAll('[data-selector]')].map(row => ({name: row.querySelector('[data-selector-name]').value.trim(), match: {headers: [...row.querySelectorAll('[data-selector-match]')].map(match => ({name: match.querySelector('[data-match-header]').value.trim(), operator: match.querySelector('[data-match-operator]').value, value: match.querySelector('[data-match-value]').value, caseSensitive: match.dataset.caseSensitive === 'true'}))}}));
+      const registeredNames = new Set(registeredSelectorNames());
+      const staleNames = [...new Set(upstreams.flatMap(upstream => upstream.appSelectors.filter(name => name && !registeredNames.has(name))))];
+      if (staleNames.length) {
+        status.className = 'error';
+        status.textContent = '无法保存：以下 AppSelector 不存在：' + staleNames.join('、') + '（请先在 registry 中创建，或移除对应选择）';
+        return;
+      }
       status.className = ''; status.textContent = '保存中'; saveButton.disabled = true;
       try {
         const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: document.getElementById('debug-toggle').checked, appSelectors, upstreams})});
@@ -342,9 +462,35 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       } catch (error) { status.className = 'error'; status.textContent = error.message || '保存失败'; }
       finally { saveButton.disabled = false; }
     });
-    document.getElementById('add-upstream').addEventListener('click', function () { table.insertAdjacentHTML('beforeend', newRow()); ensureDuplicateButtons(table); renderIcons(table); updateSummary(); });
-    document.getElementById('add-selector').addEventListener('click', function () { const empty = selectorList.querySelector('.selector-empty'); if (empty) empty.remove(); selectorList.insertAdjacentHTML('beforeend', selectorRow()); ensureDuplicateButtons(selectorList); renderIcons(selectorList); updateSelectorSummary(); });
+    document.getElementById('add-upstream').addEventListener('click', function () { table.insertAdjacentHTML('beforeend', newRow()); ensureDuplicateButtons(table); renderMultiSelect(table); renderIcons(table); updateSummary(); });
+    document.getElementById('add-selector').addEventListener('click', function () { const empty = selectorList.querySelector('.selector-empty'); if (empty) empty.remove(); selectorList.insertAdjacentHTML('beforeend', selectorRow()); ensureDuplicateButtons(selectorList); renderIcons(selectorList); updateSelectorSummary(); renderMultiSelect(document); });
     themeToggle.addEventListener('click', function () { setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
+    document.addEventListener('click', function (event) {
+      const removeChip = event.target.closest('[data-ms-remove]');
+      if (removeChip) { const ms = removeChip.closest('[data-multi-select]'); const chipName = removeChip.closest('[data-ms-chip]').dataset.msChip; setMultiSelectValue(ms, parseSelectorList(ms.querySelector('[data-app-selectors]').value).filter(name => name !== chipName)); return; }
+      const trigger = event.target.closest('[data-ms-trigger]');
+      if (trigger) { const ms = trigger.closest('[data-multi-select]'); const menu = ms.querySelector('[data-ms-menu]'); if (menu.hidden) openMultiSelect(ms); else closeMultiSelects(); return; }
+      if (!event.target.closest('[data-ms-menu]')) closeMultiSelects();
+    });
+    document.addEventListener('change', function (event) {
+      const check = event.target.closest('[data-ms-check]');
+      if (check) { const ms = check.closest('[data-multi-select]'); const value = check.value; const names = new Set(parseSelectorList(ms.querySelector('[data-app-selectors]').value)); check.checked ? names.add(value) : names.delete(value); setMultiSelectValue(ms, [...names]); const next = [...ms.querySelectorAll('[data-ms-check]')].find(el => el.value === value); if (next) next.focus(); return; }
+      if (event.target.closest('[data-selector-name]')) renderMultiSelect(document);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') { closeMultiSelects(); return; }
+      const trigger = event.target.closest('[data-ms-trigger]');
+      if (!trigger) return;
+      if (['Enter', ' ', 'ArrowDown'].includes(event.key)) {
+        event.preventDefault();
+        const ms = trigger.closest('[data-multi-select]');
+        if (ms.querySelector('[data-ms-menu]').hidden) openMultiSelect(ms);
+        const first = ms.querySelector('[data-ms-menu] input[type="checkbox"]');
+        if (first) first.focus();
+      }
+    });
+    window.addEventListener('scroll', closeMultiSelects, true);
+    window.addEventListener('resize', closeMultiSelects);
     document.addEventListener('click', function (event) {
       const telemetryTab = event.target.closest('[data-telemetry-tab]');
       if (telemetryTab) { setTelemetryView(telemetryTab.dataset.telemetryTab); return; }
@@ -355,15 +501,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       const remove = event.target.closest('[data-delete-row]');
       if (remove) { remove.closest('tr[data-row]').remove(); updateSummary(); }
       const duplicateRow = event.target.closest('[data-duplicate-row]');
-      if (duplicateRow) { const row = duplicateRow.closest('tr[data-row]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderIcons(clone); updateSummary(); return; }
+      if (duplicateRow) { const row = duplicateRow.closest('tr[data-row]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderMultiSelect(clone); renderIcons(clone); updateSummary(); return; }
       const addMatch = event.target.closest('[data-add-match]');
       if (addMatch) { const matches = addMatch.closest('[data-selector]').querySelector('[data-selector-matches]'); const empty = matches.querySelector('.selector-no-rules'); if (empty) empty.remove(); matches.insertAdjacentHTML('beforeend', selectorMatchRow()); renderIcons(matches); return; }
       const deleteMatch = event.target.closest('[data-delete-match]');
       if (deleteMatch) { const matches = deleteMatch.closest('[data-selector-matches]'); deleteMatch.closest('[data-selector-match]').remove(); if (!matches.querySelector('[data-selector-match]')) matches.insertAdjacentHTML('beforeend', selectorNoRules()); renderIcons(matches); return; }
       const deleteSelector = event.target.closest('[data-delete-selector]');
-      if (deleteSelector) { deleteSelector.closest('[data-selector]').remove(); if (!selectorList.querySelector('[data-selector]')) selectorList.innerHTML = '<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>'; updateSelectorSummary(); }
+      if (deleteSelector) { deleteSelector.closest('[data-selector]').remove(); if (!selectorList.querySelector('[data-selector]')) selectorList.innerHTML = '<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>'; updateSelectorSummary(); renderMultiSelect(document); }
       const duplicateSelector = event.target.closest('[data-duplicate-selector]');
-      if (duplicateSelector) { const row = duplicateSelector.closest('[data-selector]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderIcons(clone); updateSelectorSummary(); return; }
+      if (duplicateSelector) { const row = duplicateSelector.closest('[data-selector]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderIcons(clone); updateSelectorSummary(); renderMultiSelect(document); return; }
     });
     document.addEventListener('click', function (event) {
       const toggle = event.target.closest('[data-session-toggle]');
@@ -381,15 +527,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       event.preventDefault(); setTelemetryView(tabs[next].dataset.telemetryTab, true);
     });
     document.body.addEventListener('htmx:beforeSwap', function (event) { if (event.target !== sessionList) return; expandedSessions.clear(); sessionList.querySelectorAll('.session-card.expanded').forEach(card => expandedSessions.add(card.dataset.sessionId)); });
-    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderIcons(table); updateSummary(); } if (event.target === sessionList) { sessionList.querySelectorAll('.session-card').forEach(card => { if (expandedSessions.has(card.dataset.sessionId)) setSessionExpanded(card, true); }); renderIcons(sessionList); } });
+    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderMultiSelect(table); renderIcons(table); updateSummary(); } if (event.target === sessionList) { sessionList.querySelectorAll('.session-card').forEach(card => { if (expandedSessions.has(card.dataset.sessionId)) setSessionExpanded(card, true); }); renderIcons(sessionList); } });
     document.body.addEventListener('htmx:sseMessage', function () { const logs = document.getElementById('log-stream'); logs.scrollTop = logs.scrollHeight; });
     setTheme(document.documentElement.dataset.theme || 'dark');
-    updateSelectorSummary(); ensureDuplicateButtons(document); renderIcons(document);
+    updateSelectorSummary(); ensureDuplicateButtons(document); renderMultiSelect(document); renderIcons(document);
   </script>
 </body>
 </html>`))
 
-var fragmentTemplate = template.Must(template.New("fragment").Parse(`{{range .}}<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="{{.Name}}" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="{{.URL}}" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none"{{if eq .AuthType "none"}} selected{{end}}>none</option><option value="basic"{{if eq .AuthType "basic"}} selected{{end}}>basic</option><option value="bearer"{{if eq .AuthType "bearer"}} selected{{end}}>bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="{{.AuthValue}}" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td><input class="field-input" data-app-selectors value="{{.AppSelectorsText}}" placeholder="codex, default" aria-label="兼容的 AppSelector"></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>{{else}}<tr><td colspan="6">没有配置上游</td></tr>{{end}}`))
+var fragmentTemplate = template.Must(template.New("fragment").Parse(`{{range .}}<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="{{.Name}}" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="{{.URL}}" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none"{{if eq .AuthType "none"}} selected{{end}}>none</option><option value="basic"{{if eq .AuthType "basic"}} selected{{end}}>basic</option><option value="bearer"{{if eq .AuthType "bearer"}} selected{{end}}>bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="{{.AuthValue}}" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="app-selectors"><div class="multi-select" data-multi-select><input type="hidden" data-app-selectors value="{{.AppSelectorsText}}"><div class="ms-trigger" data-ms-trigger role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="兼容的 AppSelector"><span class="ms-chips" data-ms-chips></span><i data-lucide="chevron-down" class="ms-chevron"></i></div><div class="ms-menu" data-ms-menu hidden role="listbox" aria-multiselectable="true"></div></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>{{else}}<tr><td colspan="6">没有配置上游</td></tr>{{end}}`))
 
 func configViews(upstreams []Upstream) []configView {
 	views := make([]configView, 0, len(upstreams))
