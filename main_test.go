@@ -7,8 +7,10 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAuthorizationHeader(t *testing.T) {
@@ -73,7 +75,7 @@ func TestProxyRetriesAndInjectsAuthorization(t *testing.T) {
 	if recorder.Code != http.StatusCreated || recorder.Body.String() != "ok" {
 		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(logs.String(), "Invalid URL (GET /v1/asdfasf)") {
+	if !strings.Contains(logs.String(), "| UPSTREAM[0] | RESPONSE | 502 Bad Gateway") || !strings.Contains(logs.String(), "Invalid URL (GET /v1/asdfasf)") {
 		t.Fatalf("error response was not logged: %q", logs.String())
 	}
 }
@@ -200,5 +202,73 @@ func TestProxyRequestsUncompressedResponses(t *testing.T) {
 func TestRunRejectsUnknownFlag(t *testing.T) {
 	if err := Run([]string{"-unknown"}); err == nil {
 		t.Fatal("Run accepted an unknown flag")
+	}
+}
+
+func TestDefaultHTTPClientHasNoOverallTimeout(t *testing.T) {
+	if got := newHTTPClient(0).Timeout; got != 0 {
+		t.Fatalf("default timeout = %s, want 0", got)
+	}
+	if got := newHTTPClient(2 * time.Minute).Timeout; got != 2*time.Minute {
+		t.Fatalf("configured timeout = %s", got)
+	}
+}
+
+func TestParseSettingsSupportsLegacyAndObjectFormats(t *testing.T) {
+	legacy, err := parseSettings([]byte("- url: https://example.com/v1\n  authorization:\n    type: none\n"))
+	if err != nil || len(legacy.Upstreams) != 1 || legacy.Debug {
+		t.Fatalf("legacy settings = %#v, error = %v", legacy, err)
+	}
+
+	modern, err := parseSettings([]byte("debug: true\nupstreams:\n- url: https://example.com/v1\n  authorization:\n    type: bearer\n    value: token\n"))
+	if err != nil || !modern.Debug || len(modern.Upstreams) != 1 {
+		t.Fatalf("modern settings = %#v, error = %v", modern, err)
+	}
+}
+
+func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
+	configPath := t.TempDir() + "/config.yaml"
+	if err := os.WriteFile(configPath, []byte("debug: false\nupstreams:\n- url: https://old.example\n  authorization:\n    type: none\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &Proxy{
+		Upstreams: []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
+		Client:    http.DefaultClient,
+		Logger:    log.New(io.Discard, "", 0),
+		Config:    configPath,
+	}
+	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"upstreams":[{"url":"https://new.example","authorization":{"type":"none"}}]}`))
+	recorder := httptest.NewRecorder()
+
+	proxy.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("response status = %d", recorder.Code)
+	}
+	if !proxy.Debug || len(proxy.Upstreams) != 1 || proxy.Upstreams[0].URL != "https://new.example" {
+		t.Fatalf("runtime settings were not updated: debug=%t upstreams=%#v", proxy.Debug, proxy.Upstreams)
+	}
+	settings, err := loadSettings(configPath)
+	if err != nil || !settings.Debug || settings.Upstreams[0].URL != "https://new.example" {
+		t.Fatalf("saved settings = %#v, error = %v", settings, err)
+	}
+}
+
+func TestRequestLoggerUsesGinLikeAccessFormat(t *testing.T) {
+	var logs bytes.Buffer
+	logger := log.New(&logs, "[AGW] ", log.LstdFlags)
+	handler := requestLogger(logger, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses?stream=true", strings.NewReader("payload"))
+	req.RemoteAddr = "192.0.2.10:1234"
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+	line := logs.String()
+	for _, expected := range []string{"| 201 |", "192.0.2.10", "POST    /v1/responses?stream=true", "| 2B"} {
+		if !strings.Contains(line, expected) {
+			t.Fatalf("access log %q does not contain %q", line, expected)
+		}
 	}
 }

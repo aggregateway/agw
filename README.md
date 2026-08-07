@@ -11,7 +11,8 @@ go mod tidy
 go run ./cmd/agw
 ```
 
-`-config` 默认为当前目录的 `config.yaml`。监听端口优先读取环境变量 `PORT`，未设置时默认为 `:8080`；也可以用 `-listen` 覆盖。
+`-config` 默认为当前目录的 `config.yaml`。监听端口优先读取环境变量 `PORT`，未设置时默认为 `:8080`；也可以用 `-listen` 覆盖。`-timeout` 默认是 `0`，不会设置请求总超时，适合长时间的 SSE 流；需要限制时可以显式设置，例如 `-timeout 2m`。
+使用 `-debug` 可以在启动时开启 request header 日志；页面上的 `debug: true` toggle 可以在运行中切换并保存，无需重启。
 
 配置是一个上游数组。连接失败或上游返回 `502`、`503`、`504` 时会继续尝试下一个上游；其他响应会直接返回给客户端。
 上游配置中的 URL 只提供 scheme 和 host，客户端请求的原始 path 和 query 会原样传递给上游，不会做路径前缀拼接或改写。
@@ -33,8 +34,19 @@ go run ./cmd/agw
 认证类型暂时支持 `none`、`basic`、`bearer`。页面中使用下拉框选择类型；`none` 会原样透传客户端的 `Authorization`，`basic` 和 `bearer` 会使用配置值覆盖客户端认证。`basic` 的 `user:pass` 会自动进行 Base64 编码。
 
 配置页面支持拖动表格行调整重试顺序，直接编辑 URL、认证类型和值；认证值可以切换显示/隐藏，点击“保存”后会写回 `config.yaml` 并自动刷新。
+页面还支持新增和删除 upstream。新配置对象格式如下，旧的 upstream array 格式仍然兼容读取。
+
+```yaml
+debug: false
+upstreams:
+  - url: https://pai.d1v.ai/v1
+    authorization:
+      type: bearer
+      value: replace-with-your-token
+```
 
 页面下方的实时日志通过 SSE 从 `/logs` 推送，保留最近 100 条日志并自动滚动到底部。
+服务端日志统一使用接近 Gin 的格式和 `|` 分隔符；access log 包含状态码、耗时、客户端地址、method、path 和响应大小，upstream log 额外记录尝试、响应和重试事件。
 
 ```bash
 curl http://localhost:8080/chat/completions \

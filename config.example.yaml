@@ -1,4 +1,6 @@
-- url: https://pai.d1v.ai/v1
-  authorization:
-    type: bearer
-    value: replace-with-your-token
+debug: false
+upstreams:
+  - url: https://pai.d1v.ai/v1
+    authorization:
+      type: bearer
+      value: replace-with-your-token

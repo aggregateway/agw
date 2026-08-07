@@ -26,28 +26,49 @@ type Upstream struct {
 	Authorization *Authorization `yaml:"authorization"`
 }
 
+type Settings struct {
+	Debug     bool       `yaml:"debug" json:"debug"`
+	Upstreams []Upstream `yaml:"upstreams" json:"upstreams"`
+}
+
 type Proxy struct {
 	Upstreams []Upstream
 	Client    *http.Client
 	Logger    *log.Logger
 	Config    string
 	LogHub    *logHub
+	Debug     bool
 	Mu        sync.RWMutex
 }
 
 func loadConfig(path string) ([]Upstream, error) {
-	data, err := os.ReadFile(path)
+	settings, err := loadSettings(path)
 	if err != nil {
 		return nil, err
 	}
-	var upstreams []Upstream
-	if err := yaml.Unmarshal(data, &upstreams); err != nil {
-		return nil, fmt.Errorf("parse config: %w", err)
+	return settings.Upstreams, nil
+}
+
+func loadSettings(path string) (Settings, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Settings{}, err
 	}
-	if err := validateUpstreams(upstreams); err != nil {
-		return nil, err
+	var legacy []Upstream
+	if err := yaml.Unmarshal(data, &legacy); err == nil {
+		if err := validateUpstreams(legacy); err != nil {
+			return Settings{}, err
+		}
+		return Settings{Upstreams: legacy}, nil
 	}
-	return upstreams, nil
+	var settings Settings
+	if err := yaml.Unmarshal(data, &settings); err != nil {
+		return Settings{}, fmt.Errorf("parse config: %w", err)
+	}
+	if err := validateUpstreams(settings.Upstreams); err != nil {
+		return Settings{}, err
+	}
+	return settings, nil
 }
 
 func validateUpstreams(upstreams []Upstream) error {
@@ -128,10 +149,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	p.Mu.RLock()
 	upstreams := append([]Upstream(nil), p.Upstreams...)
+	debug := p.Debug
 	p.Mu.RUnlock()
 
 	if r.URL.Path == "/" && r.Method == http.MethodGet {
-		serveConfigPage(w, r, upstreams)
+		serveConfigPage(w, r, upstreams, debug)
 		return
 	}
 	if r.URL.Path == "/config" && r.Method == http.MethodGet {
@@ -156,23 +178,23 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var lastErr error
 	for i, upstream := range upstreams {
-		p.Logger.Printf("upstream[%d] attempting %s %s", i, r.Method, r.URL.RequestURI())
+		p.Logger.Printf("| UPSTREAM[%d] | ATTEMPT | %s %s", i, r.Method, r.URL.RequestURI())
 		header, err := authorizationHeader(upstream.Authorization)
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("upstream[%d] configuration error: %v", i, err)
+			p.Logger.Printf("| UPSTREAM[%d] | CONFIG_ERROR | %v", i, err)
 			continue
 		}
 		target, err := upstreamRequestURL(upstream.URL, r.URL.RequestURI())
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("upstream[%d] invalid target: %v", i, err)
+			p.Logger.Printf("| UPSTREAM[%d] | TARGET_ERROR | %v", i, err)
 			continue
 		}
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("upstream[%d] request creation failed: %v", i, err)
+			p.Logger.Printf("| UPSTREAM[%d] | REQUEST_ERROR | %v", i, err)
 			continue
 		}
 		copyHeaders(req.Header, r.Header)
@@ -186,7 +208,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp, err := p.Client.Do(req)
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("upstream[%d] transport error: %v", i, err)
+			p.Logger.Printf("| UPSTREAM[%d] | TRANSPORT_ERROR | %v", i, err)
 			continue
 		}
 		if resp.StatusCode >= http.StatusBadRequest {
@@ -195,9 +217,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if readErr != nil {
 				lastErr = readErr
 			}
-			p.Logger.Printf("upstream[%d] returned %s for %s %s: %s", i, resp.Status, r.Method, target, strings.TrimSpace(string(errorBody)))
+			p.Logger.Printf("| UPSTREAM[%d] | RESPONSE | %s | %s %s | %s", i, resp.Status, r.Method, target, strings.TrimSpace(string(errorBody)))
 			if retryableStatus(resp.StatusCode) && i < len(upstreams)-1 {
-				p.Logger.Printf("upstream[%d] retryable status, trying upstream[%d]", i, i+1)
+				p.Logger.Printf("| UPSTREAM[%d] | RETRY | next=UPSTREAM[%d]", i, i+1)
 				continue
 			}
 			copyResponseHeaders(w.Header(), resp.Header)
@@ -205,10 +227,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write(errorBody)
 			return
 		}
-		p.Logger.Printf("upstream[%d] returned %s, using response", i, resp.Status)
+		p.Logger.Printf("| UPSTREAM[%d] | RESPONSE | %s | using response", i, resp.Status)
 		copyResponseHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+		if _, err := io.Copy(w, resp.Body); err != nil {
+			p.Logger.Printf("| UPSTREAM[%d] | STREAM_ERROR | %v", i, err)
+		}
 		resp.Body.Close()
 		return
 	}
@@ -216,7 +240,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
 	}
-	p.Logger.Printf("all upstreams exhausted; last error: %v", lastErr)
+	p.Logger.Printf("| UPSTREAM | EXHAUSTED | last_error=%v", lastErr)
 	http.Error(w, "all upstreams failed", http.StatusBadGateway)
 }
 
@@ -263,16 +287,17 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read config", http.StatusBadRequest)
 		return
 	}
-	var upstreams []Upstream
-	if err := yaml.Unmarshal(data, &upstreams); err != nil {
+	settings, err := parseSettings(data)
+	if err != nil {
 		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := validateUpstreams(upstreams); err != nil {
-		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
-		return
+	p.Mu.RLock()
+	if settings.Upstreams == nil {
+		settings.Upstreams = append([]Upstream(nil), p.Upstreams...)
 	}
-	encoded, err := yaml.Marshal(upstreams)
+	p.Mu.RUnlock()
+	encoded, err := yaml.Marshal(settings)
 	if err != nil {
 		http.Error(w, "failed to encode config", http.StatusInternalServerError)
 		return
@@ -280,7 +305,8 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 	p.Mu.Lock()
 	err = os.WriteFile(p.Config, encoded, 0600)
 	if err == nil {
-		p.Upstreams = upstreams
+		p.Upstreams = settings.Upstreams
+		p.Debug = settings.Debug
 	}
 	p.Mu.Unlock()
 	if err != nil {
@@ -289,6 +315,24 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("HX-Trigger", "config-saved")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func parseSettings(data []byte) (Settings, error) {
+	var legacy []Upstream
+	if err := yaml.Unmarshal(data, &legacy); err == nil {
+		if err := validateUpstreams(legacy); err != nil {
+			return Settings{}, err
+		}
+		return Settings{Upstreams: legacy}, nil
+	}
+	var settings Settings
+	if err := yaml.Unmarshal(data, &settings); err != nil {
+		return Settings{}, err
+	}
+	if err := validateUpstreams(settings.Upstreams); err != nil {
+		return Settings{}, err
+	}
+	return settings, nil
 }
 
 func copyHeaders(dst, src http.Header) {

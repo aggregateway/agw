@@ -29,28 +29,40 @@ func Run(args []string) error {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&configPath, "config", configPath, "path to upstream config")
 	listen := flags.String("listen", listenDefault, "listen address")
-	timeout := flags.Duration("timeout", 60*time.Second, "per-upstream request timeout")
+	timeout := flags.Duration("timeout", 0, "per-upstream request timeout; 0 disables the timeout")
+	debug := flags.Bool("debug", false, "log incoming request headers")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	if *timeout < 0 {
+		return errors.New("timeout must be zero or greater")
+	}
 
-	upstreams, err := loadConfig(configPath)
+	settings, err := loadSettings(configPath)
 	if err != nil {
 		return err
 	}
-	logger := log.New(os.Stderr, "agw: ", log.LstdFlags)
+	logger := log.New(os.Stderr, "[AGW] ", log.LstdFlags)
 	if invalidPort != "" {
-		logger.Printf("invalid PORT %q, using %s", invalidPort, listenDefault)
+		logger.Printf("| SERVER | CONFIG_ERROR | invalid PORT %q, using %s", invalidPort, listenDefault)
 	}
 	hub := newLogHub()
 	logger.SetOutput(io.MultiWriter(os.Stderr, hub))
-	client := &http.Client{Timeout: *timeout}
-	proxy := &Proxy{Upstreams: upstreams, Client: client, Logger: logger, Config: configPath, LogHub: hub}
+	client := newHTTPClient(*timeout)
+	proxy := &Proxy{Upstreams: settings.Upstreams, Client: client, Logger: logger, Config: configPath, LogHub: hub, Debug: settings.Debug || *debug}
 
-	server := &http.Server{Addr: *listen, Handler: proxy, ReadHeaderTimeout: 10 * time.Second}
-	logger.Printf("listening on %s with %d upstreams", *listen, len(upstreams))
+	server := &http.Server{Addr: *listen, Handler: requestLogger(logger, proxy), ReadHeaderTimeout: 10 * time.Second}
+	logger.Printf("| SERVER | LISTEN | addr=%s upstreams=%d debug=%t", *listen, len(settings.Upstreams), proxy.Debug)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+func newHTTPClient(timeout time.Duration) *http.Client {
+	client := &http.Client{}
+	if timeout > 0 {
+		client.Timeout = timeout
+	}
+	return client
 }
