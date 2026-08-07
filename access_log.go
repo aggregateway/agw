@@ -55,7 +55,7 @@ func requestLogger(logger Logger, next http.Handler) http.Handler {
 			session = proxy.Sessions.start(r)
 			r = r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, session))
 		}
-		if loggerProxyDebug(logger, next) {
+		if loggerProxyDebug(next) {
 			logger.Printf("| REQUEST | HEADERS | %s", formatHeaders(r.Header))
 		}
 		writer := &accessWriter{ResponseWriter: w}
@@ -75,13 +75,15 @@ func requestLogger(logger Logger, next http.Handler) http.Handler {
 }
 
 func shouldTrackSession(r *http.Request) bool {
-	if isManagementRequest(r) {
-		return false
-	}
-	return r.Header.Get("Session-Id") != "" || r.Header.Get("Thread-Id") != "" || strings.HasPrefix(r.URL.Path, "/v1/")
+	// Track every proxied request. Session-Id/Thread-Id are Codex-specific
+	// headers and path prefixes vary by client (/v1/, /anthropic/v1/, ...),
+	// so neither is a reliable signal. Management endpoints are the only
+	// requests that bypass the proxy, and isManagementRequest covers all of
+	// them, so "not management" is exactly "goes through the proxy".
+	return !isManagementRequest(r)
 }
 
-func loggerProxyDebug(logger Logger, next http.Handler) bool {
+func loggerProxyDebug(next http.Handler) bool {
 	proxy, ok := next.(*Proxy)
 	if !ok {
 		return false
