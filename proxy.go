@@ -39,6 +39,7 @@ type HeaderMatch struct {
 	Operator      string `yaml:"operator" json:"operator"`
 	Value         string `yaml:"value" json:"value"`
 	CaseSensitive bool   `yaml:"caseSensitive,omitempty" json:"caseSensitive,omitempty"`
+	Enabled       *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	regex         *regexp.Regexp
 }
 
@@ -47,6 +48,23 @@ type BodyMatch struct {
 	Operator      string `yaml:"operator" json:"operator"`
 	Value         string `yaml:"value,omitempty" json:"value,omitempty"`
 	CaseSensitive bool   `yaml:"caseSensitive,omitempty" json:"caseSensitive,omitempty"`
+	Enabled       *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	regex         *regexp.Regexp
+}
+
+type PathMatch struct {
+	Operator string `yaml:"operator" json:"operator"`
+	Value    string `yaml:"value,omitempty" json:"value,omitempty"`
+	Enabled  *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	regex    *regexp.Regexp
+}
+
+type QueryMatch struct {
+	Name          string `yaml:"name" json:"name"`
+	Operator      string `yaml:"operator" json:"operator"`
+	Value         string `yaml:"value" json:"value"`
+	CaseSensitive bool   `yaml:"caseSensitive,omitempty" json:"caseSensitive,omitempty"`
+	Enabled       *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	regex         *regexp.Regexp
 }
 
@@ -57,13 +75,29 @@ type AppSelector struct {
 }
 
 type AppSelectorMatch struct {
+	Path    []PathMatch   `yaml:"path,omitempty" json:"path,omitempty"`
+	Query   []QueryMatch  `yaml:"query,omitempty" json:"query,omitempty"`
 	Headers []HeaderMatch `yaml:"headers,omitempty" json:"headers,omitempty"`
 	Body    []BodyMatch   `yaml:"body,omitempty" json:"body,omitempty"`
 }
 
 type FieldRewrite struct {
-	Field string `yaml:"field" json:"field"`
-	Value string `yaml:"value" json:"value"`
+	Field   string `yaml:"field" json:"field"`
+	Value   string `yaml:"value" json:"value"`
+	Enabled *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+}
+
+// RuleEnabled reports whether a rule is active. Rules without an explicit
+// "enabled" field default to enabled so existing configs keep working.
+func (m HeaderMatch) RuleEnabled() bool  { return m.Enabled == nil || *m.Enabled }
+func (m BodyMatch) RuleEnabled() bool    { return m.Enabled == nil || *m.Enabled }
+func (m PathMatch) RuleEnabled() bool    { return m.Enabled == nil || *m.Enabled }
+func (m QueryMatch) RuleEnabled() bool   { return m.Enabled == nil || *m.Enabled }
+func (r FieldRewrite) RuleEnabled() bool { return r.Enabled == nil || *r.Enabled }
+
+// HasRules reports whether a selector defines any rules (enabled or disabled).
+func (s AppSelector) HasRules() bool {
+	return len(s.Match.Path)+len(s.Match.Query)+len(s.Match.Headers)+len(s.Match.Body)+len(s.Rewrite) > 0
 }
 
 type Settings struct {
@@ -129,6 +163,9 @@ func validateSettings(settings *Settings) error {
 		selectorNames[name] = struct{}{}
 		for j := range selector.Match.Headers {
 			matcher := &selector.Match.Headers[j]
+			if !matcher.RuleEnabled() {
+				continue
+			}
 			if strings.TrimSpace(matcher.Name) == "" || strings.ContainsAny(matcher.Name, "\r\n") || strings.ContainsAny(matcher.Value, "\r\n") {
 				return fmt.Errorf("app selector %q header %d is invalid", name, j+1)
 			}
@@ -139,8 +176,26 @@ func validateSettings(settings *Settings) error {
 				return fmt.Errorf("app selector %q header %d: %w", name, j+1, err)
 			}
 		}
+		for q := range selector.Match.Query {
+			matcher := &selector.Match.Query[q]
+			if !matcher.RuleEnabled() {
+				continue
+			}
+			if strings.TrimSpace(matcher.Name) == "" || strings.ContainsAny(matcher.Name, "\r\n") || strings.ContainsAny(matcher.Value, "\r\n") {
+				return fmt.Errorf("app selector %q query rule %d is invalid", name, q+1)
+			}
+			if !supportedHeaderOperator(matcher.Operator) {
+				return fmt.Errorf("app selector %q has unsupported query operator %q", name, matcher.Operator)
+			}
+			if err := compileQueryMatcher(matcher); err != nil {
+				return fmt.Errorf("app selector %q query rule %d: %w", name, q+1, err)
+			}
+		}
 		for k := range selector.Match.Body {
 			matcher := &selector.Match.Body[k]
+			if !matcher.RuleEnabled() {
+				continue
+			}
 			if strings.TrimSpace(matcher.Field) == "" || strings.ContainsAny(matcher.Field, "\r\n") || strings.ContainsAny(matcher.Value, "\r\n") {
 				return fmt.Errorf("app selector %q body rule %d is invalid", name, k+1)
 			}
@@ -153,8 +208,26 @@ func validateSettings(settings *Settings) error {
 		}
 		for r := range selector.Rewrite {
 			rewrite := &selector.Rewrite[r]
+			if !rewrite.RuleEnabled() {
+				continue
+			}
 			if strings.TrimSpace(rewrite.Field) == "" || strings.ContainsAny(rewrite.Field, "\r\n") || strings.ContainsAny(rewrite.Value, "\r\n") {
 				return fmt.Errorf("app selector %q rewrite rule %d is invalid", name, r+1)
+			}
+		}
+		for p := range selector.Match.Path {
+			path := &selector.Match.Path[p]
+			if !path.RuleEnabled() {
+				continue
+			}
+			if !supportedHeaderOperator(path.Operator) {
+				return fmt.Errorf("app selector %q has unsupported path operator %q", name, path.Operator)
+			}
+			if !strings.EqualFold(strings.TrimSpace(path.Operator), "present") && strings.TrimSpace(path.Value) == "" {
+				return fmt.Errorf("app selector %q path rule requires a non-empty value", name)
+			}
+			if err := compilePathMatcher(path); err != nil {
+				return fmt.Errorf("app selector %q path rule %d: %w", name, p+1, err)
 			}
 		}
 	}
@@ -227,6 +300,26 @@ func compileHeaderMatcher(matcher *HeaderMatch) error {
 	return nil
 }
 
+func compileQueryMatcher(matcher *QueryMatch) error {
+	matcher.regex = nil
+	if !strings.EqualFold(matcher.Operator, "regex") {
+		return nil
+	}
+	if matcher.Value == "" {
+		return errors.New("regex value is empty")
+	}
+	pattern := matcher.Value
+	if !matcher.CaseSensitive {
+		pattern = "(?i)" + pattern
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex: %w", err)
+	}
+	matcher.regex = compiled
+	return nil
+}
+
 func compileBodyMatcher(matcher *BodyMatch) error {
 	matcher.regex = nil
 	if !strings.EqualFold(matcher.Operator, "regex") {
@@ -240,6 +333,22 @@ func compileBodyMatcher(matcher *BodyMatch) error {
 		pattern = "(?i)" + pattern
 	}
 	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex: %w", err)
+	}
+	matcher.regex = compiled
+	return nil
+}
+
+func compilePathMatcher(matcher *PathMatch) error {
+	matcher.regex = nil
+	if !strings.EqualFold(matcher.Operator, "regex") {
+		return nil
+	}
+	if matcher.Value == "" {
+		return errors.New("regex value is empty")
+	}
+	compiled, err := regexp.Compile(matcher.Value)
 	if err != nil {
 		return fmt.Errorf("invalid regex: %w", err)
 	}
@@ -330,18 +439,113 @@ func headerMatchMatches(matcher HeaderMatch, headers http.Header) bool {
 	return false
 }
 
-func appSelectorMatches(selector AppSelector, headers http.Header, body []byte) bool {
+// queryMatchMatches matches URL query parameters (r.URL.Query()). The parameter
+// name lookup is exact, values follow the same operator semantics as headers,
+// and by default comparison is case-insensitive unless caseSensitive is set.
+func queryMatchMatches(matcher QueryMatch, query url.Values) bool {
+	values := query[matcher.Name]
+	if strings.EqualFold(matcher.Operator, "present") {
+		return len(values) > 0
+	}
+	needle := matcher.Value
+	if !matcher.CaseSensitive {
+		needle = strings.ToLower(needle)
+	}
+	for _, value := range values {
+		comparison := value
+		if !matcher.CaseSensitive {
+			comparison = strings.ToLower(comparison)
+		}
+		switch strings.ToLower(strings.TrimSpace(matcher.Operator)) {
+		case "exact":
+			if comparison == needle {
+				return true
+			}
+		case "prefix":
+			if strings.HasPrefix(comparison, needle) {
+				return true
+			}
+		case "contains":
+			if strings.Contains(comparison, needle) {
+				return true
+			}
+		case "regex":
+			compiled := matcher.regex
+			if compiled == nil {
+				if err := compileQueryMatcher(&matcher); err != nil {
+					continue
+				}
+				compiled = matcher.regex
+			}
+			if compiled.MatchString(value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appSelectorMatches(selector AppSelector, path string, query url.Values, headers http.Header, body []byte) bool {
+	for _, matcher := range selector.Match.Path {
+		if !matcher.RuleEnabled() {
+			continue
+		}
+		if !pathMatchMatches(matcher, path) {
+			return false
+		}
+	}
+	for _, matcher := range selector.Match.Query {
+		if !matcher.RuleEnabled() {
+			continue
+		}
+		if !queryMatchMatches(matcher, query) {
+			return false
+		}
+	}
 	for _, matcher := range selector.Match.Headers {
+		if !matcher.RuleEnabled() {
+			continue
+		}
 		if !headerMatchMatches(matcher, headers) {
 			return false
 		}
 	}
 	for _, matcher := range selector.Match.Body {
+		if !matcher.RuleEnabled() {
+			continue
+		}
 		if !bodyMatchMatches(matcher, body) {
 			return false
 		}
 	}
 	return true
+}
+
+// pathMatchMatches matches the request URL path (without query string). Path
+// rules are case-sensitive, unlike header/body rules, because URL paths are
+// case-sensitive by spec; the operator set is the same as headers.
+func pathMatchMatches(matcher PathMatch, path string) bool {
+	if strings.EqualFold(matcher.Operator, "present") {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(matcher.Operator)) {
+	case "exact":
+		return path == matcher.Value
+	case "prefix":
+		return strings.HasPrefix(path, matcher.Value)
+	case "contains":
+		return strings.Contains(path, matcher.Value)
+	case "regex":
+		compiled := matcher.regex
+		if compiled == nil {
+			if err := compilePathMatcher(&matcher); err != nil {
+				return false
+			}
+			compiled = matcher.regex
+		}
+		return compiled.MatchString(path)
+	}
+	return false
 }
 
 func bodyMatchMatches(matcher BodyMatch, body []byte) bool {
@@ -455,6 +659,9 @@ func applyRewrites(body []byte, rewrites []FieldRewrite) []byte {
 		return body
 	}
 	for _, rewrite := range rewrites {
+		if !rewrite.RuleEnabled() {
+			continue
+		}
 		setJSONPath(root, rewrite.Field, parseRewriteValue(rewrite.Value))
 	}
 	encoded, err := json.Marshal(root)
@@ -627,7 +834,7 @@ func upstreamSupportsSelector(upstream Upstream, selector string) bool {
 	return false
 }
 
-func routeUpstreams(upstreams []Upstream, selectors []AppSelector, headers http.Header, body []byte) ([]routedUpstream, string, error) {
+func routeUpstreams(upstreams []Upstream, selectors []AppSelector, path string, query url.Values, headers http.Header, body []byte) ([]routedUpstream, string, error) {
 	if len(selectors) == 0 {
 		routed := make([]routedUpstream, 0, len(upstreams))
 		for index, upstream := range upstreams {
@@ -636,7 +843,7 @@ func routeUpstreams(upstreams []Upstream, selectors []AppSelector, headers http.
 		return routed, "", nil
 	}
 	for _, selector := range selectors {
-		if !appSelectorMatches(selector, headers, body) {
+		if !appSelectorMatches(selector, path, query, headers, body) {
 			continue
 		}
 		routed := make([]routedUpstream, 0, len(upstreams))
@@ -715,7 +922,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if session != nil {
 		originalModel, _ = bodyFieldValue(body, "model")
 	}
-	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.Header, body)
+	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.URL.Path, r.URL.Query(), r.Header, body)
 	if routeErr != nil {
 		p.Logger.Printf("| ROUTER | NO_MATCH | %v", routeErr)
 		if session != nil {

@@ -33,9 +33,64 @@ go run ./cmd/agw
 
 认证类型暂时支持 `none`、`basic`、`bearer`。页面中使用下拉框选择类型；`none` 会原样透传客户端的 `Authorization`，`basic` 和 `bearer` 会使用配置值覆盖客户端认证。`basic` 的 `user:pass` 会自动进行 Base64 编码。
 
-配置页面支持拖动表格行调整重试顺序，直接编辑 URL、认证类型、认证值以及 upstream 兼容的 selector；认证值可以切换显示/隐藏，点击“保存”后会写回 `config.yaml` 并自动刷新。页面还支持新增和删除 upstream，以及新增、删除、排序 AppSelector 和 header / JSON body 条件。
+配置页面支持拖动表格行调整重试顺序，直接编辑 URL、认证类型、认证值以及 upstream 兼容的 selector；认证值可以切换显示/隐藏，点击“保存”后会写回 `config.yaml` 并自动刷新。页面还支持新增和删除 upstream，以及新增、删除、排序 AppSelector。每个 selector 的规则统一放在一列里，每条规则带类型标签（path / header / body / rewrite）和启用开关：点“＋ 添加规则”会弹出菜单选择规则类型，用开关临时禁用某条规则方便调试，不用整个删除。
 
-`appSelectors` 是服务端内部的应用识别规则，不要求客户端携带任何 AGW 专用 header。每个 selector 按配置顺序匹配客户端已有的 HTTP header 和 JSON body 字段，支持 `exact`、`prefix`、`contains`、`regex` 和 `present`；默认不区分大小写，可为单条规则设定 `caseSensitive: true`。首个命中的 selector 决定路由。upstream 的 `appSelectors` 是它兼容的 selector 名称列表，只有兼容的 upstream 才会进入该请求的逐级重试链。未配置任何 selector 时保持旧行为，所有 upstream 按原顺序参与重试。
+`appSelectors` 是服务端内部的应用识别规则，不要求客户端携带任何 AGW 专用 header。每个 selector 按配置顺序匹配请求的 URL path、query 参数、HTTP header 和 JSON body 字段，支持 `exact`、`prefix`、`contains`、`regex` 和 `present`；query / header / body 规则默认不区分大小写，可为单条规则设定 `caseSensitive: true`，path 规则按 URL 规范区分大小写。规则可以设置 `enabled: false` 临时禁用（缺省视为启用），禁用的规则不参与匹配、也不参与校验，方便调试时保存半成品配置。首个命中的 selector 决定路由。upstream 的 `appSelectors` 是它兼容的 selector 名称列表，只有兼容的 upstream 才会进入该请求的逐级重试链。未配置任何 selector 时保持旧行为，所有 upstream 按原顺序参与重试。
+
+### Query 匹配（按 URL 参数路由）
+
+`match.query` 按参数名精确查找请求的 query string（如 `?api-version=2024-02-15`），值沿用与 header 相同的算子；同名参数出现多次时，任意一个值命中即算匹配。适合按客户端传的参数分流，例如不同 `api-version` 走不同上游：
+
+```yaml
+appSelectors:
+  - name: by-version
+    match:
+      query:
+        - name: api-version
+          operator: prefix
+          value: 2024
+
+upstreams:
+  - url: https://2024.example
+    name: v2024
+    appSelectors: [by-version]
+```
+
+### Path 匹配（按 API 风格路由）
+
+`match.path` 只匹配请求的 URL path（不含 query），适合按 API 风格分流：Anthropic `/v1/messages`、OpenAI Chat Completions `/v1/chat/completions`、OpenAI Responses `/v1/responses`。path 与 header、body 一样是规则列表，同一个 selector 内的所有规则全部命中才算匹配，可以把 path 规则与 header / body 规则混用。
+
+```yaml
+appSelectors:
+  - name: anthropic-messages
+    match:
+      path:
+        - operator: exact
+          value: /v1/messages
+  - name: chat-completions
+    match:
+      path:
+        - operator: exact
+          value: /v1/chat/completions
+  - name: responses-api
+    match:
+      path:
+        - operator: exact
+          value: /v1/responses
+
+upstreams:
+  - url: https://anthropic.example
+    name: claude
+    appSelectors: [anthropic-messages]
+  - url: https://deepseek.example
+    name: deepseek
+    appSelectors: [chat-completions]
+  - url: https://api.openai.com
+    name: openai
+    appSelectors: [responses-api, chat-completions]
+```
+
+请求 path 会原样透传给上游（上游 URL 只提供 scheme 和 host），所以 `/v1/responses` 的请求只会到达声明了 `responses-api` selector 的 upstream；没有兼容 upstream 时返回 `503`，避免把请求盲目打到只支持 Chat Completions 的上游。
 
 ### Body peek（JSON body 匹配）
 

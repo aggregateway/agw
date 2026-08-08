@@ -1,4 +1,30 @@
 debug: false
+# 也可以按请求 path 区分 API 风格（Anthropic / Chat Completions / Responses），
+# 例如：
+# appSelectors:
+#   - name: anthropic-messages
+#     match:
+#       path:
+#         - operator: exact
+#           value: /v1/messages
+#   - name: chat-completions
+#     match:
+#       path:
+#         - operator: exact
+#           value: /v1/chat/completions
+#   - name: responses-api
+#     match:
+#       path:
+#         - operator: exact
+#           value: /v1/responses
+# 也可以按 query 参数分流，例如：
+#   - name: by-version
+#     match:
+#       query:
+#         - name: api-version
+#           operator: prefix
+#           value: 2024
+# 规则可以设置 enabled: false 临时禁用（缺省视为启用）。
 appSelectors:
   - name: openai-client
     match:

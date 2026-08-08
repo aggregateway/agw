@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -238,7 +239,7 @@ func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
 		{Name: "d1v-backup", AppSelectors: []string{"codex-luna"}},
 	}
 	request := http.Header{"User-Agent": []string{"Codex/1.0"}}
-	routed, selected, err := routeUpstreams(upstreams, selectors, request, nil)
+	routed, selected, err := routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, request, nil)
 	if err != nil || selected != "codex-luna" || len(routed) != 2 {
 		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -246,7 +247,7 @@ func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
 		t.Fatalf("non-compatible upstream entered retry chain: %#v", routed)
 	}
 
-	routed, selected, err = routeUpstreams(upstreams, selectors, http.Header{"User-Agent": []string{"OpenAI/1.0"}}, nil)
+	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, http.Header{"User-Agent": []string{"OpenAI/1.0"}}, nil)
 	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
 		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -261,12 +262,12 @@ func TestBodySelectorRoutesByModelField(t *testing.T) {
 		{Name: "deepseek", AppSelectors: []string{"deepseek-model"}},
 		{Name: "luna", AppSelectors: []string{"default"}},
 	}
-	routed, selected, err := routeUpstreams(upstreams, selectors, http.Header{}, []byte(`{"model":"deepseek","messages":[]}`))
+	routed, selected, err := routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"deepseek","messages":[]}`))
 	if err != nil || selected != "deepseek-model" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
 		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
 	}
 
-	routed, selected, err = routeUpstreams(upstreams, selectors, http.Header{}, []byte(`{"model":"gpt-5.6-luna","messages":[]}`))
+	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"gpt-5.6-luna","messages":[]}`))
 	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "luna" {
 		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -274,29 +275,29 @@ func TestBodySelectorRoutesByModelField(t *testing.T) {
 
 func TestBodySelectorNestedFieldPrefixAndCase(t *testing.T) {
 	selector := AppSelector{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "metadata.provider", Operator: "prefix", Value: "Deep"}}}}
-	if !appSelectorMatches(selector, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"deepseek"}}`)) {
+	if !appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"deepseek"}}`)) {
 		t.Fatal("nested case-insensitive prefix should match")
 	}
-	if appSelectorMatches(selector, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"openai"}}`)) {
+	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"openai"}}`)) {
 		t.Fatal("prefix rule matched an unrelated value")
 	}
-	if appSelectorMatches(selector, http.Header{}, []byte(`not json`)) {
+	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`not json`)) {
 		t.Fatal("non-JSON body must not match")
 	}
-	if appSelectorMatches(selector, http.Header{}, []byte(`{"metadata":42}`)) {
+	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"metadata":42}`)) {
 		t.Fatal("missing nested field must not match")
 	}
-	if appSelectorMatches(selector, http.Header{}, []byte(`{"metadata":{"provider":null}}`)) {
+	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"metadata":{"provider":null}}`)) {
 		t.Fatal("null value must not match")
 	}
 }
 
 func TestBodySelectorPresentAndValidation(t *testing.T) {
 	selector := AppSelector{Name: "stream", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "stream", Operator: "present"}}}}
-	if !appSelectorMatches(selector, http.Header{}, []byte(`{"stream":true}`)) {
+	if !appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"stream":true}`)) {
 		t.Fatal("present rule should match when field exists")
 	}
-	if appSelectorMatches(selector, http.Header{}, []byte(`{"model":"x"}`)) {
+	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x"}`)) {
 		t.Fatal("present rule matched a missing field")
 	}
 	_, err := parseSettings([]byte(`appSelectors:
@@ -514,8 +515,374 @@ upstreams:
 
 func TestAppSelectorWithoutRulesMatchesAllRequests(t *testing.T) {
 	selector := AppSelector{Name: "catch-all"}
-	if !appSelectorMatches(selector, http.Header{"User-Agent": []string{"Codex/1.0"}}, nil) {
+	if !appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{"User-Agent": []string{"Codex/1.0"}}, nil) {
 		t.Fatal("AppSelector without header rules should match every request")
+	}
+}
+
+func TestPathSelectorRoutesByAPI(t *testing.T) {
+	selectors := []AppSelector{
+		{Name: "anthropic-messages", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/messages"}}}},
+		{Name: "chat-completions", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/chat/completions"}}}},
+		{Name: "responses-api", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/responses"}}}},
+	}
+	upstreams := []Upstream{
+		{Name: "anthropic", AppSelectors: []string{"anthropic-messages"}},
+		{Name: "openai", AppSelectors: []string{"responses-api"}},
+		{Name: "deepseek", AppSelectors: []string{"chat-completions"}},
+		{Name: "openai-chat", AppSelectors: []string{"chat-completions", "responses-api"}},
+	}
+
+	tests := []struct {
+		path     string
+		selector string
+		want     []string
+	}{
+		{"/v1/messages", "anthropic-messages", []string{"anthropic"}},
+		{"/v1/chat/completions", "chat-completions", []string{"deepseek", "openai-chat"}},
+		{"/v1/responses", "responses-api", []string{"openai", "openai-chat"}},
+	}
+	for _, tt := range tests {
+		routed, selected, err := routeUpstreams(upstreams, selectors, tt.path, nil, http.Header{}, nil)
+		if err != nil || selected != tt.selector {
+			t.Fatalf("path %s: routed=%#v selector=%q error=%v", tt.path, routed, selected, err)
+		}
+		got := make([]string, 0, len(routed))
+		for _, r := range routed {
+			got = append(got, r.Upstream.Name)
+		}
+		if len(got) != len(tt.want) {
+			t.Fatalf("path %s: routed %v, want %v", tt.path, got, tt.want)
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Fatalf("path %s: routed %v, want %v", tt.path, got, tt.want)
+			}
+		}
+	}
+
+	if _, _, err := routeUpstreams(upstreams, selectors, "/v1/embeddings", nil, http.Header{}, nil); err == nil {
+		t.Fatal("unmatched path should fail routing")
+	}
+}
+
+func TestPathMatchSemantics(t *testing.T) {
+	rule := func(op, value string) PathMatch { return PathMatch{Operator: op, Value: value} }
+	if !pathMatchMatches(rule("exact", "/v1/chat/completions"), "/v1/chat/completions") {
+		t.Fatal("exact match should succeed")
+	}
+	if pathMatchMatches(rule("exact", "/v1/chat/completions"), "/v1/CHAT/completions") {
+		t.Fatal("path matching must be case-sensitive")
+	}
+	if !pathMatchMatches(rule("prefix", "/v1/"), "/v1/responses") {
+		t.Fatal("prefix match should succeed")
+	}
+	if !pathMatchMatches(rule("contains", "responses"), "/v1/responses") {
+		t.Fatal("contains match should succeed")
+	}
+	if !pathMatchMatches(rule("regex", `^/v1/(responses|messages)$`), "/v1/messages") {
+		t.Fatal("regex match should succeed")
+	}
+	if pathMatchMatches(rule("regex", "["), "/v1/chat/completions") {
+		t.Fatal("invalid regex must not match")
+	}
+	if !pathMatchMatches(rule("present", ""), "/anything") {
+		t.Fatal("present rule should always match a path")
+	}
+}
+
+func TestQueryMatchSemantics(t *testing.T) {
+	rule := func(name, op, value string) QueryMatch { return QueryMatch{Name: name, Operator: op, Value: value} }
+	query := url.Values{"model": []string{"deepseek-v4"}, "api-version": []string{"2024-02-15"}}
+	if !queryMatchMatches(rule("model", "exact", "deepseek-v4"), query) {
+		t.Fatal("exact query match should succeed")
+	}
+	if !queryMatchMatches(rule("model", "prefix", "deepseek"), query) {
+		t.Fatal("prefix query match should succeed")
+	}
+	if !queryMatchMatches(rule("model", "exact", "DEEPSEEK-V4"), query) {
+		t.Fatal("query matching must be case-insensitive by default")
+	}
+	if !queryMatchMatches(QueryMatch{Name: "model", Operator: "exact", Value: "deepseek-v4", CaseSensitive: true}, query) {
+		t.Fatal("caseSensitive query match should succeed")
+	}
+	if queryMatchMatches(QueryMatch{Name: "model", Operator: "exact", Value: "deepseek-V4", CaseSensitive: true}, query) {
+		t.Fatal("caseSensitive query match must not ignore case differences")
+	}
+	if !queryMatchMatches(rule("model", "regex", `^deepseek-v\d+$`), query) {
+		t.Fatal("regex query match should succeed")
+	}
+	if queryMatchMatches(rule("model", "regex", "["), query) {
+		t.Fatal("invalid regex must not match")
+	}
+	if !queryMatchMatches(rule("api-version", "present", ""), query) {
+		t.Fatal("present rule should match an existing query parameter")
+	}
+	if queryMatchMatches(rule("missing", "present", ""), query) {
+		t.Fatal("present rule must not match a missing query parameter")
+	}
+}
+
+func TestQuerySelectorRoutesByParam(t *testing.T) {
+	selectors := []AppSelector{
+		{Name: "by-version", Match: AppSelectorMatch{Query: []QueryMatch{{Name: "api-version", Operator: "prefix", Value: "2024"}}}},
+		{Name: "by-model", Match: AppSelectorMatch{Query: []QueryMatch{{Name: "model", Operator: "exact", Value: "deepseek"}}}},
+		{Name: "default"},
+	}
+	upstreams := []Upstream{
+		{Name: "v2024", AppSelectors: []string{"by-version"}},
+		{Name: "deepseek", AppSelectors: []string{"by-model"}},
+		{Name: "fallback", AppSelectors: []string{"default"}},
+	}
+
+	routed, selected, err := routeUpstreams(upstreams, selectors, "/v1/chat/completions", url.Values{"api-version": []string{"2024-02-15"}}, http.Header{}, nil)
+	if err != nil || selected != "by-version" || len(routed) != 1 || routed[0].Upstream.Name != "v2024" {
+		t.Fatalf("version route = %#v selector=%q error=%v", routed, selected, err)
+	}
+	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", url.Values{"model": []string{"deepseek"}}, http.Header{}, nil)
+	if err != nil || selected != "by-model" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
+		t.Fatalf("model route = %#v selector=%q error=%v", routed, selected, err)
+	}
+	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", url.Values{}, http.Header{}, nil)
+	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "fallback" {
+		t.Fatalf("default route = %#v selector=%q error=%v", routed, selected, err)
+	}
+}
+
+func TestPathSelectorValidation(t *testing.T) {
+	configs := []string{
+		`appSelectors:
+  - name: bad-op
+    match:
+      path:
+        - operator: fuzzy
+          value: /v1
+upstreams:
+  - url: https://example.com
+    appSelectors: [bad-op]
+`,
+		`appSelectors:
+  - name: empty-value
+    match:
+      path:
+        - operator: exact
+upstreams:
+  - url: https://example.com
+    appSelectors: [empty-value]
+`,
+		`appSelectors:
+  - name: bad-regex
+    match:
+      path:
+        - operator: regex
+          value: "["
+upstreams:
+  - url: https://example.com
+    appSelectors: [bad-regex]
+`,
+	}
+	for _, config := range configs {
+		if _, err := parseSettings([]byte(config)); err == nil {
+			t.Fatalf("config should fail validation: %s", config)
+		}
+	}
+}
+
+func TestQuerySelectorValidation(t *testing.T) {
+	configs := []string{
+		`appSelectors:
+  - name: empty-name
+    match:
+      query:
+        - name: ""
+          operator: exact
+          value: x
+upstreams:
+  - url: https://example.com
+    appSelectors: [empty-name]
+`,
+		`appSelectors:
+  - name: bad-op
+    match:
+      query:
+        - name: model
+          operator: fuzzy
+          value: deepseek
+upstreams:
+  - url: https://example.com
+    appSelectors: [bad-op]
+`,
+		`appSelectors:
+  - name: bad-regex
+    match:
+      query:
+        - name: model
+          operator: regex
+          value: "["
+upstreams:
+  - url: https://example.com
+    appSelectors: [bad-regex]
+`,
+	}
+	for _, config := range configs {
+		if _, err := parseSettings([]byte(config)); err == nil {
+			t.Fatalf("config should fail validation: %s", config)
+		}
+	}
+}
+
+func TestDisabledRulesAreSkipped(t *testing.T) {
+	disabled := false
+	enabled := true
+
+	// Header, body and path rules that are disabled must not block routing.
+	selector := AppSelector{
+		Name: "mixed",
+		Match: AppSelectorMatch{
+			Path:    []PathMatch{{Operator: "exact", Value: "/v1/chat/completions", Enabled: &disabled}},
+			Query:   []QueryMatch{{Name: "model", Operator: "exact", Value: "blocked", Enabled: &disabled}},
+			Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "never-matches", Enabled: &disabled}},
+			Body:    []BodyMatch{{Field: "model", Operator: "exact", Value: "blocked", Enabled: &disabled}},
+		},
+	}
+	if !appSelectorMatches(selector, "/v1/chat/completions", url.Values{"model": []string{"blocked"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
+		t.Fatal("disabled rules must not block a selector")
+	}
+
+	// Enabled rules still apply.
+	selector.Match.Headers[0].Enabled = &enabled
+	if appSelectorMatches(selector, "/v1/chat/completions", url.Values{"model": []string{"blocked"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
+		t.Fatal("enabled header rule should still block a non-matching request")
+	}
+	selector.Match.Headers[0].Enabled = &disabled
+	selector.Match.Query[0].Enabled = &enabled
+	if appSelectorMatches(selector, "/v1/chat/completions", url.Values{"model": []string{"other"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
+		t.Fatal("enabled query rule should still block a non-matching request")
+	}
+
+	// Disabled rewrites must not rewrite the body.
+	rewritten := applyRewrites([]byte(`{"model":"deepseek","messages":[]}`), []FieldRewrite{{Field: "model", Value: "gpt", Enabled: &disabled}})
+	if strings.Contains(string(rewritten), "gpt") {
+		t.Fatalf("disabled rewrite modified the body: %s", rewritten)
+	}
+	rewritten = applyRewrites([]byte(`{"model":"deepseek","messages":[]}`), []FieldRewrite{{Field: "model", Value: "gpt", Enabled: &enabled}})
+	if !strings.Contains(string(rewritten), `"model":"gpt"`) {
+		t.Fatalf("enabled rewrite did not apply: %s", rewritten)
+	}
+}
+
+func TestDisabledRulesSkipValidation(t *testing.T) {
+	settings, err := parseSettings([]byte(`appSelectors:
+  - name: messy
+    match:
+      path:
+        - operator: regex
+          value: "["
+          enabled: false
+      headers:
+        - name: User-Agent
+          operator: contains
+          value: ""
+upstreams:
+  - url: https://example.com
+    appSelectors: [messy]
+`))
+	if err != nil {
+		t.Fatalf("disabled invalid rules should be accepted: %v", err)
+	}
+	if settings.AppSelectors[0].Match.Path[0].RuleEnabled() {
+		t.Fatal("explicit enabled: false should disable the rule")
+	}
+	if !settings.AppSelectors[0].Match.Headers[0].RuleEnabled() {
+		t.Fatal("rules without an enabled field default to enabled")
+	}
+}
+
+func TestProxyRoutesResponsesAPIOnlyToCompatibleUpstream(t *testing.T) {
+	chatOnly := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("chat-only upstream received %s request", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "chat")
+	}))
+	defer chatOnly.Close()
+	responses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			t.Errorf("responses upstream received %s request", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "responses")
+	}))
+	defer responses.Close()
+
+	proxy := &Proxy{
+		Upstreams: []Upstream{
+			{Name: "deepseek", URL: chatOnly.URL, AppSelectors: []string{"chat-completions"}, Authorization: &Authorization{Type: "none"}},
+			{Name: "openai", URL: responses.URL, AppSelectors: []string{"responses-api"}, Authorization: &Authorization{Type: "none"}},
+		},
+		AppSelectors: []AppSelector{
+			{Name: "chat-completions", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/chat/completions"}}}},
+			{Name: "responses-api", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/responses"}}}},
+		},
+		Client: http.DefaultClient,
+		Logger: log.New(io.Discard, "", 0),
+	}
+
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5"}`)))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "responses" {
+		t.Fatalf("responses route = %d %q", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-v4"}`)))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "chat" {
+		t.Fatalf("chat route = %d %q", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unroutable path status = %d", recorder.Code)
+	}
+}
+
+func TestProxyRoutesByQueryParam(t *testing.T) {
+	byVersion := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "v2024")
+	}))
+	defer byVersion.Close()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "fallback")
+	}))
+	defer fallback.Close()
+
+	proxy := &Proxy{
+		Upstreams: []Upstream{
+			{Name: "v2024", URL: byVersion.URL, AppSelectors: []string{"by-version"}, Authorization: &Authorization{Type: "none"}},
+			{Name: "fallback", URL: fallback.URL, AppSelectors: []string{"default"}, Authorization: &Authorization{Type: "none"}},
+		},
+		AppSelectors: []AppSelector{
+			{Name: "by-version", Match: AppSelectorMatch{Query: []QueryMatch{{Name: "api-version", Operator: "prefix", Value: "2024"}}}},
+			{Name: "default"},
+		},
+		Client: http.DefaultClient,
+		Logger: log.New(io.Discard, "", 0),
+	}
+
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions?api-version=2024-02-15", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "v2024" {
+		t.Fatalf("query route = %d %q", recorder.Code, recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions?model=deepseek", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "fallback" {
+		t.Fatalf("fallback route = %d %q", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -801,19 +1168,14 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("config page status = %d", recorder.Code)
 	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", "Header match<br>rules", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
 		}
 	}
-	for _, expected := range []string{"Body match<br>rules", "data-selector-body-matches", "data-body-field", "No body rules", "data-add-body-match", "data-delete-body-match"} {
+	for _, expected := range []string{"data-rule", "data-rule-type", "rule-kind", "data-add-rule", "data-rule-type-option", `data-rule-type-option="query"`, "data-rule-enabled", "data-rule-delete", "data-rule-empty", "rule-switch"} {
 		if !strings.Contains(content, expected) {
-			t.Fatalf("config page missing body match UI %q", expected)
-		}
-	}
-	for _, expected := range []string{"Request rewrite<br>rules", "data-selector-rewrites", "data-rewrite-field", "data-rewrite-value", "No rewrites", "data-add-rewrite", "data-delete-rewrite"} {
-		if !strings.Contains(content, expected) {
-			t.Fatalf("config page missing rewrite UI %q", expected)
+			t.Fatalf("config page missing rule UI %q", expected)
 		}
 	}
 	for _, expected := range []string{"reconcileSessionCards", "updateSessionCard", "refreshResponsePreviews", "EventSource('/sessions/stream')"} {
@@ -839,12 +1201,12 @@ func TestConfigPageRendersBodyMatchRules(t *testing.T) {
 		{Name: "deepseek", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek", CaseSensitive: true}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}}},
 	}, false)
 	content := recorder.Body.String()
-	for _, expected := range []string{`value="deepseek"`, `value="model"`, `data-selector-body-match`, `data-case-sensitive="true"`} {
+	for _, expected := range []string{`value="deepseek"`, `value="model"`, `data-rule-type="body"`, `data-case-sensitive="true"`} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page body rules missing %q", expected)
 		}
 	}
-	for _, expected := range []string{`value="gpt-5.6-luna"`, `data-selector-rewrite`} {
+	for _, expected := range []string{`value="gpt-5.6-luna"`, `data-rule-type="rewrite"`} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page rewrite rules missing %q", expected)
 		}
