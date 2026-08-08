@@ -166,10 +166,51 @@ func (h *sessionHub) start(r *http.Request) *trackedSession {
 	}
 	record.Requests = append(record.Requests, request)
 	if len(record.Requests) > maxRequestsPerSession {
+		pruned := record.Requests[:len(record.Requests)-maxRequestsPerSession]
 		record.Requests = record.Requests[len(record.Requests)-maxRequestsPerSession:]
+		removePayloadFiles(pruned)
 	}
 	h.publishLocked()
+	h.evictLocked()
 	return &trackedSession{hub: h, sessionID: id, sequence: request.Sequence}
+}
+
+// evictLocked drops the least recently seen records beyond maxSessionCards so
+// the session map (and the on-disk payload files) cannot grow without bound.
+func (h *sessionHub) evictLocked() {
+	excess := len(h.records) - maxSessionCards
+	for i := 0; i < excess; i++ {
+		var oldestID string
+		var oldest time.Time
+		for id, record := range h.records {
+			if oldestID == "" || record.LastSeen.Before(oldest) {
+				oldestID = id
+				oldest = record.LastSeen
+			}
+		}
+		if oldestID == "" {
+			return
+		}
+		record := h.records[oldestID]
+		for _, request := range record.Requests {
+			if request.ResponseFile != nil {
+				_ = request.ResponseFile.Close()
+			}
+		}
+		removePayloadFiles(record.Requests)
+		delete(h.records, oldestID)
+	}
+}
+
+func removePayloadFiles(requests []*sessionRequest) {
+	for _, request := range requests {
+		if request.RequestPath != "" {
+			_ = os.Remove(request.RequestPath)
+		}
+		if request.ResponsePath != "" {
+			_ = os.Remove(request.ResponsePath)
+		}
+	}
 }
 
 func (t *trackedSession) connected(status int) {

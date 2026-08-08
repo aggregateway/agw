@@ -1198,6 +1198,27 @@ func TestSessionCardShowsRewrittenModel(t *testing.T) {
 	}
 }
 
+func TestSessionHubEvictsOldRecordsAndFiles(t *testing.T) {
+	hub := newSessionHub()
+	defer hub.close()
+	for i := 0; i < maxSessionCards+10; i++ {
+		hub.start(httptest.NewRequest(http.MethodGet, "/v1/responses", nil))
+	}
+	hub.mu.Lock()
+	count := len(hub.records)
+	hub.mu.Unlock()
+	if count != maxSessionCards {
+		t.Fatalf("records = %d, want %d", count, maxSessionCards)
+	}
+	entries, err := os.ReadDir(hub.payloadDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) > maxSessionCards*2 {
+		t.Fatalf("payload files = %d, want <= %d", len(entries), maxSessionCards*2)
+	}
+}
+
 func TestSessionResponsePayloadReadsLatestDiskBytes(t *testing.T) {
 	hub := newSessionHub()
 	defer hub.close()
@@ -1282,6 +1303,52 @@ func TestHeaderMapStructured(t *testing.T) {
 	values, ok := structured["Accept"].([]string)
 	if !ok || len(values) != 2 || values[0] != "a" || values[1] != "b" {
 		t.Fatalf("multi-valued header = %#v", structured["Accept"])
+	}
+}
+
+func TestBasicAuthProtectsManagementPaths(t *testing.T) {
+	hits := 0
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(http.StatusOK)
+	})
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	handler := basicAuth(logger, "admin", "secret", next)
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config", nil))
+	if recorder.Code != http.StatusUnauthorized || recorder.Header().Get("WWW-Authenticate") == "" {
+		t.Fatalf("unauthenticated management request = %d, challenge=%q", recorder.Code, recorder.Header().Get("WWW-Authenticate"))
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	request.SetBasicAuth("admin", "wrong")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password status = %d", recorder.Code)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/config", nil)
+	request.SetBasicAuth("admin", "secret")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || hits != 1 {
+		t.Fatalf("authenticated management request = %d hits=%d", recorder.Code, hits)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil))
+	if recorder.Code != http.StatusOK || hits != 2 {
+		t.Fatalf("proxied path must stay open: status=%d hits=%d", recorder.Code, hits)
+	}
+
+	preflight := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+	preflight.Header.Set("Access-Control-Request-Method", "POST")
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, preflight)
+	if recorder.Code != http.StatusOK || hits != 3 {
+		t.Fatalf("CORS preflight must stay open: status=%d hits=%d", recorder.Code, hits)
 	}
 }
 
