@@ -172,6 +172,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .logs-meta { color: #9db5ae; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
     #log-stream { height: 250px; overflow: auto; padding: 14px; margin: 0; color: #c6d8d2; background: #13211f; white-space: pre-wrap; word-break: break-word; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     #log-stream::selection { color: #13211f; background: #cbe86b; }
+    .log-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: #f7faf8; border-bottom: 1px solid #e5ece9; }
+    .log-toolbar .text-button.is-active { color: #3f8b73; }
     .telemetry { margin-top: 20px; overflow: hidden; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .04); }
     .telemetry-tabbar { display: flex; align-items: end; gap: 3px; padding: 10px 12px 0; background: #e9efec; border-bottom: 1px solid #d7e0dc; }
     .telemetry-tab { display: inline-flex; min-height: 35px; align-items: center; gap: 7px; padding: 0 12px; margin-bottom: -1px; color: #60736d; background: transparent; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
@@ -318,6 +320,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .session-cell { color: #a9bdb6; }
     :root[data-theme="dark"] .session-empty-cell { color: #5c716a; }
     :root[data-theme="dark"] .session-metric strong, :root[data-theme="dark"] .session-overview strong, :root[data-theme="dark"] .header-list dd, :root[data-theme="dark"] .request-list { color: #d1dfd9; }
+    :root[data-theme="dark"] .log-toolbar { background: #101a17; border-color: #2b403a; }
     :root[data-theme="dark"] .session-headers h3, :root[data-theme="dark"] .session-events h3, :root[data-theme="dark"] .header-list dt, :root[data-theme="dark"] .gateway-events time { color: #93aaa1; }
     :root[data-theme="dark"] .gateway-events li { color: #c9d8d1; border-color: #293d38; }
     :root[data-theme="dark"] .gateway-event-kind { color: #7fcaab; }
@@ -373,7 +376,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       <h2 class="sr-only" id="telemetry-title">Telemetry</h2>
       <div class="telemetry-tabbar" role="tablist" aria-label="观测视图"><button class="telemetry-tab" type="button" role="tab" id="sessions-tab" aria-selected="true" aria-controls="sessions-panel" data-telemetry-tab="sessions">Session journal</button><button class="telemetry-tab" type="button" role="tab" id="logs-tab" aria-selected="false" aria-controls="logs-panel" data-telemetry-tab="logs"><span class="live-dot"></span><span>Live request feed</span><span class="tab-connection">SSE connected</span></button></div>
       <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab"><div class="session-table-head" role="row"><span></span><span>Session</span><span>Selector</span><span>Upstream</span><span>Model</span><span>State</span><span>Status</span><span>Transfer</span><span>Duration</span><span></span></div><div id="session-list" class="session-list"></div></div>
-      <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><pre id="log-stream" hx-ext="sse" sse-connect="/logs" sse-swap="message" hx-swap="beforeend"></pre></div>
+      <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><div class="log-toolbar"><span class="tab-connection" data-log-connection>SSE connected</span><button class="text-button" type="button" data-log-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i>pretty</button></div><pre id="log-stream"></pre></div>
     </section>
   </main>
   <script>
@@ -823,7 +826,39 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       event.preventDefault(); setTelemetryView(tabs[next].dataset.telemetryTab, true);
     });
     document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderMultiSelect(table); renderIcons(table); updateSummary(); } });
-    document.body.addEventListener('htmx:sseMessage', function () { const logs = document.getElementById('log-stream'); logs.scrollTop = logs.scrollHeight; });
+    const logStream = document.getElementById('log-stream');
+    const logPretty = document.querySelector('[data-log-pretty]');
+    const logConnection = document.querySelector('[data-log-connection]');
+    const logLines = [];
+    function formatLogLine(line) {
+      try { return JSON.stringify(JSON.parse(line), null, 2); } catch (_) { return line; }
+    }
+    function appendLogText(text) {
+      logStream.append(document.createTextNode(text + '\n'));
+      logStream.scrollTop = logStream.scrollHeight;
+    }
+    function renderLogLines() {
+      const pretty = logPretty.classList.contains('is-active');
+      const fragment = document.createDocumentFragment();
+      logLines.forEach(line => fragment.append(document.createTextNode((pretty ? formatLogLine(line) : line) + '\n')));
+      logStream.textContent = '';
+      logStream.append(fragment);
+      logStream.scrollTop = logStream.scrollHeight;
+    }
+    function appendLogLine(line) {
+      logLines.push(line);
+      if (logLines.length > 500) logLines.splice(0, logLines.length - 500);
+      appendLogText(logPretty.classList.contains('is-active') ? formatLogLine(line) : line);
+    }
+    const logEvents = new EventSource('/logs');
+    logEvents.onmessage = event => { if (event.data) appendLogLine(event.data); };
+    logEvents.onopen = () => { if (logConnection) logConnection.textContent = 'SSE connected'; };
+    logEvents.onerror = () => { if (logConnection) logConnection.textContent = '重连中…'; };
+    logPretty.addEventListener('click', function () {
+      const active = logPretty.classList.toggle('is-active');
+      logPretty.setAttribute('aria-pressed', String(active));
+      renderLogLines();
+    });
     fetch('/sessions').then(response => response.text()).then(reconcileSessionCards).catch(() => {});
     const sessionEvents = new EventSource('/sessions/stream');
     let pendingSessionHTML = null;
