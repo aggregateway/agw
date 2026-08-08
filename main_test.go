@@ -1063,8 +1063,8 @@ func TestSessionHubTracksLifecycleAndRedactsHeaders(t *testing.T) {
 	if strings.Contains(content, "data: hello") || strings.Contains(content, "request-body-") {
 		t.Fatalf("session card embeds payload data: %s", content)
 	}
-	if !strings.Contains(content, `data-session-payload="request"`) || !strings.Contains(content, `data-session-payload="response"`) || !strings.Contains(content, "data-payload-full") || !strings.Contains(content, "data-payload-toggle") || !strings.Contains(content, "is-collapsed") {
-		t.Fatalf("session card does not include collapsed payload loaders or the full-file button: %s", content)
+	if !strings.Contains(content, `data-payload-open="request"`) || !strings.Contains(content, `data-payload-open="response"`) || !strings.Contains(content, "data-payload-buttons") {
+		t.Fatalf("session card does not include the payload open buttons: %s", content)
 	}
 	if !strings.Contains(content, `<span class="session-metric session-transfer"><small>latest transfer</small><strong>2.0 KB</strong></span>`) {
 		t.Fatalf("session card does not include the latest transfer summary: %s", content)
@@ -1261,7 +1261,7 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("config page Cache-Control = %q, want no-store", got)
 	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<", "data-payload-modal"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
 		}
@@ -1271,7 +1271,7 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 			t.Fatalf("config page missing rule UI %q", expected)
 		}
 	}
-	for _, expected := range []string{"reconcileSessionCards", "updateSessionCard", "refreshResponsePreviews", "EventSource('/sessions/stream')"} {
+	for _, expected := range []string{"reconcileSessionCards", "updateSessionCard", "openPayloadModal", "EventSource('/sessions/stream')"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing session journal JS %q", expected)
 		}

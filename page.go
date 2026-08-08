@@ -209,21 +209,25 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .session-details { padding: 0 14px 14px; border-top: 1px solid #e8eeeb; background: #fbfdfc; }
     .session-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; padding: 12px 0; border-bottom: 1px solid #e7eeea; }
     .session-overview span { display: grid; gap: 3px; }
-    .payload-preview { margin: 12px 0 0; overflow: hidden; border: 1px solid #dce7e2; border-radius: 5px; background: #12211e; }
-    .payload-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; color: #b8ccc5; border-bottom: 1px solid #29423c; }
-    .payload-preview-head h3 { margin: 0; color: #dceae5; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
-    .payload-preview-head .payload-meta { overflow: hidden; color: #8eaaa1; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
-    .payload-preview-head .payload-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
-    .payload-preview-head .payload-actions .icon-button { width: 26px; height: 26px; color: #8eaaa1; }
-    .payload-preview-head .payload-actions .icon-button:hover { color: #dceae5; background: rgba(255, 255, 255, .08); }
-    .payload-preview-head .payload-actions .icon-button.is-active { color: #cbe86b; }
-    .payload-preview pre { max-height: 300px; padding: 11px; margin: 0; overflow: auto; color: #cae0d8; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .payload-preview-head { cursor: pointer; }
-    .payload-preview.is-collapsed pre { display: none; }
-    .payload-toggle-chevron { transition: transform .15s ease; }
-    .payload-preview:not(.is-collapsed) .payload-toggle-chevron { transform: rotate(180deg); }
-    .request-preview { border-color: #365d50; }
-    .request-preview .payload-preview-head { background: #162a24; }
+    .payload-open-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+    .payload-open { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 10px 12px; color: #dceae5; background: #162a24; border: 1px solid #29423c; border-radius: 6px; cursor: pointer; text-align: left; font: inherit; }
+    .payload-open:hover { background: #1d342d; border-color: #3c6658; }
+    .payload-open svg { flex: 0 0 15px; width: 15px; height: 15px; color: #8bc7a9; }
+    .payload-open span { overflow: hidden; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-open small { margin-left: auto; overflow: hidden; color: #8eaaa1; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .payload-modal[hidden] { display: none; }
+    .payload-modal-backdrop { position: absolute; inset: 0; background: rgba(8, 20, 17, .6); }
+    .payload-modal-box { position: relative; display: flex; flex-direction: column; width: min(1100px, 100%); height: min(720px, 90%); overflow: hidden; background: #0f1b18; border: 1px solid #29423c; border-radius: 8px; box-shadow: 0 24px 64px rgba(0, 0, 0, .45); }
+    .payload-modal-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; color: #b8ccc5; background: #162a24; border-bottom: 1px solid #29423c; }
+    .payload-modal-head h3 { margin: 0; color: #dceae5; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .02em; }
+    .payload-modal-meta { overflow: hidden; color: #8eaaa1; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-modal-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+    .payload-modal-actions .icon-button { width: 28px; height: 28px; color: #8eaaa1; }
+    .payload-modal-actions .icon-button:hover { color: #dceae5; background: rgba(255, 255, 255, .08); }
+    .payload-modal-actions .icon-button.is-active { color: #cbe86b; }
+    .payload-modal-body { flex: 1; min-height: 0; margin: 0; padding: 14px; overflow: auto; color: #cae0d8; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    body.has-modal { overflow: hidden; }
     .session-headers { padding-top: 12px; }
     .session-events { padding-top: 12px; }
     .session-headers h3, .session-events h3 { margin: 0 0 8px; color: #647773; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
@@ -380,27 +384,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     const themeToggle = document.getElementById('theme-toggle');
     const sessionList = document.getElementById('session-list');
     const expandedSessions = new Set();
-    const requestPayloadCache = new Map();
     let dragged, dragContainer, dropIndicator, dragGhost;
     function renderIcons(scope) { if (window.lucide) window.lucide.createIcons({root: scope || document, attrs: {'stroke-width': 1.8}}); }
     function setTheme(theme) { document.documentElement.dataset.theme = theme; try { localStorage.setItem('agw-theme', theme); } catch (_) {} const isDark = theme === 'dark'; themeToggle.title = isDark ? '切换到浅色主题' : '切换到深色主题'; themeToggle.setAttribute('aria-label', themeToggle.title); themeToggle.innerHTML = '<i data-lucide="' + (isDark ? 'sun' : 'moon') + '"></i>'; renderIcons(themeToggle); }
     function setTelemetryView(view, focus) { document.querySelectorAll('[data-telemetry-tab]').forEach(tab => { const active = tab.dataset.telemetryTab === view; tab.setAttribute('aria-selected', String(active)); document.getElementById(tab.getAttribute('aria-controls')).hidden = !active; if (active && focus) tab.focus(); }); }
-    function replacePayloadText(target, text) {
-      // Replacing textContent resets the scroll position of the <pre>; restore
-      // it so live updates never yank the reader back to the top.
-      const scrollTop = target.scrollTop;
-      target.textContent = text;
-      target.scrollTop = scrollTop;
-    }
-    function renderPayload(target) {
-      const raw = target.dataset.raw || '';
-      const preview = target.closest('.payload-preview');
-      const pretty = preview && preview.querySelector('[data-payload-pretty]');
-      if (pretty && pretty.classList.contains('is-active')) {
-        try { replacePayloadText(target, JSON.stringify(JSON.parse(raw), null, 2)); return; } catch (_) {}
-      }
-      replacePayloadText(target, raw);
-    }
     function copyText(text) {
       if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
       return new Promise(function (resolve, reject) {
@@ -413,48 +400,57 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         try { document.execCommand('copy') ? resolve() : reject(new Error('copy failed')); } catch (error) { reject(error); } finally { area.remove(); }
       });
     }
-    function hydratePayload(target, sessionID) {
-      const kind = target.dataset.sessionPayload;
-      const cacheKey = sessionID + ':' + kind;
-      if (kind === 'request' && requestPayloadCache.has(cacheKey)) {
-        target.dataset.raw = requestPayloadCache.get(cacheKey);
-        renderPayload(target);
-        return;
-      }
-      fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind)
-        .then(response => { if (!response.ok) throw new Error('payload ' + response.status); return response.text(); })
-        .then(payload => { target.dataset.raw = payload; renderPayload(target); if (kind === 'request') requestPayloadCache.set(cacheKey, payload); })
-        .catch(() => {});
+    function formatByteCount(n) {
+      if (n < 1024) return n + ' B';
+      const k = n / 1024;
+      if (k < 1024) return k.toFixed(1) + ' KB';
+      return (k / 1024).toFixed(1) + ' MB';
     }
-    function hydrateSessionPayloads(card) {
-      const sessionID = card.dataset.sessionId;
-      card.querySelectorAll('[data-session-payload]').forEach(target => {
-        const preview = target.closest('.payload-preview');
-        if (preview && preview.classList.contains('is-collapsed')) return;
-        hydratePayload(target, sessionID);
-      });
+    function setModalBody(body) {
+      const raw = body.dataset.raw || '';
+      const pretty = document.querySelector('[data-payload-modal-pretty]');
+      const scrollTop = body.scrollTop;
+      if (pretty && pretty.classList.contains('is-active')) {
+        try { body.textContent = JSON.stringify(JSON.parse(raw), null, 2); body.scrollTop = scrollTop; return; } catch (_) {}
+      }
+      body.textContent = raw;
+      body.scrollTop = scrollTop;
+    }
+    function openPayloadModal(sessionID, kind) {
+      const modal = document.querySelector('[data-payload-modal]');
+      const body = modal.querySelector('[data-payload-modal-body]');
+      const title = modal.querySelector('[data-payload-modal-title]');
+      const meta = modal.querySelector('[data-payload-modal-meta]');
+      const pretty = modal.querySelector('[data-payload-modal-pretty]');
+      pretty.classList.remove('is-active');
+      pretty.setAttribute('aria-pressed', 'false');
+      title.textContent = kind === 'request' ? 'Intercepted request' : 'Intercepted response';
+      meta.textContent = '加载中…';
+      body.textContent = '';
+      body.dataset.raw = '';
+      modal.dataset.sessionId = sessionID;
+      modal.dataset.kind = kind;
+      modal.hidden = false;
+      document.body.classList.add('has-modal');
+      fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind)
+        .then(response => { if (!response.ok) throw new Error('加载失败 (' + response.status + ')'); return response.text(); })
+        .then(text => { body.dataset.raw = text; setModalBody(body); meta.textContent = formatByteCount(new Blob([text]).size) + ' · ' + text.length.toLocaleString() + ' chars'; })
+        .catch(error => { body.textContent = String(error); meta.textContent = '加载失败'; });
+    }
+    function closePayloadModal() {
+      const modal = document.querySelector('[data-payload-modal]');
+      modal.hidden = true;
+      document.body.classList.remove('has-modal');
     }
     function setSessionExpanded(card, expanded) {
       const details = card.querySelector('.session-details');
       card.querySelector('[data-session-toggle]').setAttribute('aria-expanded', String(expanded));
       details.hidden = !expanded;
       card.classList.toggle('expanded', expanded);
-      if (expanded) {
-        expandedSessions.add(card.dataset.sessionId);
-        hydrateSessionPayloads(card);
-      } else {
-        expandedSessions.delete(card.dataset.sessionId);
-        requestPayloadCache.delete(card.dataset.sessionId + ':request');
-        card.querySelectorAll('.payload-preview').forEach(preview => {
-          preview.classList.add('is-collapsed');
-          const head = preview.querySelector('[data-payload-toggle]');
-          if (head) head.setAttribute('aria-expanded', 'false');
-          const target = preview.querySelector('[data-session-payload]');
-          if (target) delete target.dataset.raw;
-        });
-      }
+      if (expanded) expandedSessions.add(card.dataset.sessionId);
+      else expandedSessions.delete(card.dataset.sessionId);
     }
-    const metricTextInterval = 1000; // ms; how often live metric text (transfer/duration) may be written
+    const metricTextInterval = 2000; // ms; how often live metric text (transfer/duration) may be written
     const pendingTextUpdates = new Map();
     let textFlushTimer = null;
     function scheduleTextUpdate(el, text) {
@@ -514,7 +510,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     }
     function summaryStructure(summary) { return [...summary.children].map(el => el.className).join('|'); }
     function withScrollPreserved(node, fn) {
-      const scrollables = [...node.querySelectorAll('pre[data-session-payload], .header-list, .gateway-events')];
+      const scrollables = [...node.querySelectorAll('.header-list, .gateway-events')];
       const positions = scrollables.map(el => el.scrollTop);
       fn();
       scrollables.forEach((el, i) => { el.scrollTop = positions[i]; });
@@ -538,14 +534,21 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       const oldEvents = oldDetails.querySelector('.session-events');
       const newEvents = newDetails.querySelector('.session-events');
       if (oldEvents && newEvents && oldEvents.outerHTML !== newEvents.outerHTML) oldEvents.replaceWith(newEvents);
-      const newRequest = newDetails.querySelector('.request-preview');
-      const oldRequest = oldDetails.querySelector('.request-preview');
-      if (newRequest && !oldRequest) { oldDetails.querySelector('.session-headers').insertAdjacentElement('afterend', newRequest); renderIcons(newRequest); hydrateSessionPayloads(oldCard); }
-      else if (newRequest && oldRequest) { const oldHead = oldRequest.querySelector('.payload-preview-head span'); const newHead = newRequest.querySelector('.payload-preview-head span'); if (oldHead && newHead && oldHead.textContent !== newHead.textContent) oldHead.textContent = newHead.textContent; }
-      const newResponse = newDetails.querySelector('.response-preview');
-      const oldResponse = oldDetails.querySelector('.response-preview');
-      if (newResponse && !oldResponse) { const anchor = oldDetails.querySelector('.request-preview') || oldDetails.querySelector('.session-headers'); anchor.insertAdjacentElement('afterend', newResponse); renderIcons(newResponse); hydrateSessionPayloads(oldCard); }
-      else if (newResponse && oldResponse) { const oldHead = oldResponse.querySelector('.payload-preview-head span'); const newHead = newResponse.querySelector('.payload-preview-head span'); if (oldHead && newHead && oldHead.textContent !== newHead.textContent) oldHead.textContent = newHead.textContent; }
+      const newButtons = newDetails.querySelector('[data-payload-buttons]');
+      const oldButtons = oldDetails.querySelector('[data-payload-buttons]');
+      if (newButtons && !oldButtons) { oldDetails.querySelector('.session-headers').insertAdjacentElement('afterend', newButtons); renderIcons(newButtons); }
+      else if (newButtons && oldButtons) {
+        for (const kind of ['request', 'response']) {
+          const newBtn = newButtons.querySelector('[data-payload-open="' + kind + '"]');
+          const oldBtn = oldButtons.querySelector('[data-payload-open="' + kind + '"]');
+          if (newBtn && !oldBtn) { oldButtons.insertAdjacentElement('beforeend', newBtn); renderIcons(newBtn); }
+          else if (newBtn && oldBtn) {
+            const oldMeta = oldBtn.querySelector('small');
+            const newMeta = newBtn.querySelector('small');
+            if (oldMeta && newMeta && oldMeta.textContent !== newMeta.textContent) oldMeta.textContent = newMeta.textContent;
+          }
+        }
+      }
       if (oldCard.classList.contains('expanded')) { const toggle = oldCard.querySelector('[data-session-toggle]'); if (toggle) toggle.setAttribute('aria-expanded', 'true'); }
     }
     function reconcileSessionCards(html) {
@@ -580,14 +583,6 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       const empty = sessionList.querySelector('.session-empty');
       if (incoming.length) { if (empty) empty.remove(); }
       else if (!sessionList.querySelector('.session-card')) { const el = doc.querySelector('.session-empty'); if (el) sessionList.append(el); }
-    }
-    function refreshResponsePreviews() {
-      sessionList.querySelectorAll('.session-card.expanded .response-preview:not(.is-collapsed) [data-session-payload="response"]').forEach(pre => {
-        const card = pre.closest('.session-card');
-        const indicator = card.querySelector('.session-indicator');
-        if (indicator && /is-(completed|warning|error)/.test(indicator.className)) return;
-        fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/response').then(response => response.text()).then(payload => { if (pre.dataset.raw !== payload) { pre.dataset.raw = payload; renderPayload(pre); } }).catch(() => {});
-      });
     }
     function updateSummary() { document.getElementById('upstream-count').textContent = table.querySelectorAll('tr[data-row]').length + ' upstreams'; }
     function updateSelectorSummary() { document.getElementById('selector-count').textContent = selectorList.querySelectorAll('[data-selector]').length + ' selectors'; }
@@ -745,7 +740,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       if (event.target.closest('[data-selector-name]')) renderMultiSelect(document);
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { closeMultiSelects(); document.querySelectorAll('[data-rule-menu]').forEach(menu => menu.hidden = true); return; }
+      if (event.key === 'Escape') { closeMultiSelects(); document.querySelectorAll('[data-rule-menu]').forEach(menu => menu.hidden = true); closePayloadModal(); return; }
       const trigger = event.target.closest('[data-ms-trigger]');
       if (!trigger) return;
       if (['Enter', ' ', 'ArrowDown'].includes(event.key)) {
@@ -784,48 +779,38 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     document.addEventListener('click', function (event) {
       const toggle = event.target.closest('[data-session-toggle]');
       if (toggle) { const card = toggle.closest('.session-card'); setSessionExpanded(card, toggle.getAttribute('aria-expanded') !== 'true'); return; }
-      const full = event.target.closest('[data-payload-full]');
-      if (full) { const preview = full.closest('.payload-preview'); const card = preview.closest('.session-card'); window.open('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/' + preview.querySelector('[data-session-payload]').dataset.sessionPayload + '?full=1', '_blank'); return; }
-      const pretty = event.target.closest('[data-payload-pretty]');
-      if (pretty) {
-        const preview = pretty.closest('.payload-preview');
-        const target = preview.querySelector('[data-session-payload]');
-        const active = pretty.classList.contains('is-active');
+      const payloadOpen = event.target.closest('[data-payload-open]');
+      if (payloadOpen) { const card = payloadOpen.closest('.session-card'); openPayloadModal(card.dataset.sessionId, payloadOpen.dataset.payloadOpen); return; }
+      const modalFull = event.target.closest('[data-payload-modal-full]');
+      if (modalFull) { const modal = document.querySelector('[data-payload-modal]'); window.open('/sessions/' + encodeURIComponent(modal.dataset.sessionId) + '/' + modal.dataset.kind + '?full=1', '_blank'); return; }
+      const modalPretty = event.target.closest('[data-payload-modal-pretty]');
+      if (modalPretty) {
+        const body = document.querySelector('[data-payload-modal-body]');
+        const active = modalPretty.classList.contains('is-active');
         if (!active) {
-          try { JSON.parse(target.dataset.raw || ''); } catch (_) { return; }
+          try { JSON.parse(body.dataset.raw || ''); } catch (_) { return; }
         }
-        pretty.classList.toggle('is-active', !active);
-        pretty.setAttribute('aria-pressed', String(!active));
-        renderPayload(target);
+        modalPretty.classList.toggle('is-active', !active);
+        modalPretty.setAttribute('aria-pressed', String(!active));
+        setModalBody(body);
         return;
       }
-      const copy = event.target.closest('[data-payload-copy]');
-      if (copy) {
-        const preview = copy.closest('.payload-preview');
-        const target = preview.querySelector('[data-session-payload]');
-        const text = target.dataset.raw || target.textContent;
+      const modalCopy = event.target.closest('[data-payload-modal-copy]');
+      if (modalCopy) {
+        const body = document.querySelector('[data-payload-modal-body]');
+        const text = body.dataset.raw || body.textContent;
         copyText(text).then(() => {
-          const original = copy.title;
-          copy.title = '已复制';
-          copy.setAttribute('aria-label', '已复制');
-          copy.innerHTML = '<i data-lucide="check"></i>';
-          renderIcons(copy);
-          setTimeout(() => { copy.title = original; copy.setAttribute('aria-label', original); copy.innerHTML = '<i data-lucide="copy"></i>'; renderIcons(copy); }, 1200);
+          const original = modalCopy.title;
+          modalCopy.title = '已复制';
+          modalCopy.setAttribute('aria-label', '已复制');
+          modalCopy.innerHTML = '<i data-lucide="check"></i>';
+          renderIcons(modalCopy);
+          setTimeout(() => { modalCopy.title = original; modalCopy.setAttribute('aria-label', original); modalCopy.innerHTML = '<i data-lucide="copy"></i>'; renderIcons(modalCopy); }, 1200);
         }).catch(() => {});
         return;
       }
-      const payloadToggle = event.target.closest('[data-payload-toggle]');
-      if (payloadToggle) {
-        const preview = payloadToggle.closest('.payload-preview');
-        const collapsed = preview.classList.contains('is-collapsed');
-        preview.classList.toggle('is-collapsed', !collapsed);
-        payloadToggle.setAttribute('aria-expanded', String(collapsed));
-        if (collapsed) {
-          const target = preview.querySelector('[data-session-payload]');
-          if (target && !target.dataset.raw) hydratePayload(target, preview.closest('.session-card').dataset.sessionId);
-        }
-        return;
-      }
+      const modalClose = event.target.closest('[data-payload-modal-close], [data-payload-modal-backdrop]');
+      if (modalClose) { closePayloadModal(); return; }
     });
     document.addEventListener('keydown', function (event) {
       const current = event.target.closest('[data-telemetry-tab]');
@@ -851,10 +836,25 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         if (pendingSessionHTML != null) { const html = pendingSessionHTML; pendingSessionHTML = null; reconcileSessionCards(html); }
       }, 80);
     });
-    setInterval(refreshResponsePreviews, 800);
     setTheme(document.documentElement.dataset.theme || 'dark');
     updateSelectorSummary(); ensureDuplicateButtons(document); renderMultiSelect(document); renderIcons(document);
   </script>
+  <div class="payload-modal" data-payload-modal hidden role="dialog" aria-modal="true" aria-labelledby="payload-modal-title">
+    <div class="payload-modal-backdrop" data-payload-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="payload-modal-title" data-payload-modal-title>Intercepted response</h3>
+        <span class="payload-modal-meta" data-payload-modal-meta></span>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-payload-modal-full title="打开完整原文" aria-label="打开完整原文"><i data-lucide="file-text"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <pre class="payload-modal-body" data-payload-modal-body></pre>
+    </div>
+  </div>
 </body>
 </html>`))
 
