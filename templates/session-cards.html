@@ -1,0 +1,22 @@
+{{range .}}
+<article class="session-card" data-session-id="{{.ID}}">
+  <button class="session-summary" type="button" data-session-toggle aria-expanded="false">
+    <span class="session-indicator {{.StateClass}}"></span>
+    <span class="session-primary"><span class="session-path"><b>{{.Latest.Method}}</b> {{.Latest.Path}}</span><span class="session-id">{{.ShortID}} · {{.Started}}</span></span>
+    <span class="session-cell session-selector">{{if .Latest.AppSelector}}{{.Latest.AppSelector}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
+    <span class="session-cell session-upstream">{{if .Latest.Upstream}}{{.Latest.Upstream}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
+    <span class="session-cell session-model">{{if .Latest.Model}}{{.Latest.Model}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
+    <span class="session-state {{.StateClass}}">{{.State}}</span>
+    <span class="session-metric session-status"><small>status</small><strong>{{.Status}}</strong></span>
+    <span class="session-metric session-send"><small>send</small><strong>{{.Latest.RequestBytes}}</strong></span>
+    <span class="session-metric session-receive"><small>receive</small><strong>{{.Latest.ResponseBytes}}</strong></span>
+    <span class="session-metric session-duration"><small>duration</small><strong>{{.Duration}}</strong></span>
+    <i data-lucide="chevron-down" class="session-chevron"></i>
+  </button>
+  <div class="session-details" hidden>
+    <div class="session-overview"><span><small>App selector</small><strong>{{.Latest.AppSelector}}</strong></span><span><small>Model</small><strong>{{.Latest.Model}}</strong></span><span><small>Upstream</small><strong>{{.Latest.Upstream}}</strong></span><span><small>Connection</small><strong class="{{.StateClass}}">{{.State}}</strong></span><span><small>Requests</small><strong>{{.RequestCount}}</strong></span><span><small>Send</small><strong>{{.Latest.RequestBytes}}</strong></span><span><small>Receive</small><strong>{{.Latest.ResponseBytes}}</strong></span><span><small>Latest duration</small><strong>{{.Latest.Duration}}</strong></span></div>
+    <section class="session-headers"><h3>Latest request headers</h3><dl class="header-list">{{range .Latest.Headers}}<div><dt>{{.Name}}</dt><dd>{{.Value}}</dd></div>{{else}}<div><dt>Headers</dt><dd>unavailable</dd></div>{{end}}</dl></section>
+    {{if or .Latest.HasRequestBody .Latest.HasResponseBody}}<div class="payload-open-buttons" data-payload-buttons>{{if .Latest.HasRequestBody}}<button class="payload-open" type="button" data-payload-open="request"><i data-lucide="arrow-up-right"></i><span>Intercepted request</span><small>{{.Latest.RequestContentType}} · {{.Latest.RequestBytes}}</small></button>{{end}}{{if .Latest.HasResponseBody}}<button class="payload-open" type="button" data-payload-open="response"><i data-lucide="arrow-down-left"></i><span>Intercepted response</span><small>{{.Latest.ContentType}} · {{.Latest.ResponseBytes}} · live tail</small></button>{{end}}</div>{{end}}
+    <section class="session-events"><h3>Gateway events</h3><ol class="gateway-events">{{range .Latest.Events}}<li><time>{{.At}}</time><span class="gateway-event-kind">{{.Kind}}</span><span>{{.Detail}}</span></li>{{else}}<li class="gateway-events-empty">Waiting for upstream activity</li>{{end}}</ol></section>
+  </div>
+</article>{{else}}<div class="session-empty">暂无 API 会话。新的请求会实时出现在这里。</div>{{end}}

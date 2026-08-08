@@ -2,6 +2,8 @@ package agw
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -10,10 +12,43 @@ type logHub struct {
 	mu      sync.Mutex
 	clients map[chan string]struct{}
 	history []string
+	file    *os.File
 }
 
 func newLogHub() *logHub {
 	return &logHub{clients: make(map[chan string]struct{})}
+}
+
+// newLogHubPersistent appends every log line to dir/logs.jsonl and restores
+// the recent history from that file, so the request feed survives restarts.
+func newLogHubPersistent(dir string) *logHub {
+	hub := newLogHub()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return hub
+	}
+	path := filepath.Join(dir, "logs.jsonl")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return hub
+	}
+	hub.file = file
+	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		if len(lines) > 100 {
+			lines = lines[len(lines)-100:]
+		}
+		hub.history = lines
+	}
+	return hub
+}
+
+func (h *logHub) close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.file != nil {
+		_ = h.file.Close()
+		h.file = nil
+	}
 }
 
 func (h *logHub) Write(data []byte) (int, error) {
@@ -22,6 +57,9 @@ func (h *logHub) Write(data []byte) (int, error) {
 		return len(data), nil
 	}
 	h.mu.Lock()
+	if h.file != nil {
+		_, _ = h.file.WriteString(message + "\n")
+	}
 	h.history = append(h.history, message)
 	if len(h.history) > 100 {
 		h.history = h.history[len(h.history)-100:]

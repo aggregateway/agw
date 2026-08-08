@@ -29,6 +29,15 @@ type Options struct {
 	// environment variables and must always be set together.
 	AdminUser     string
 	AdminPassword string
+	// Dev enables developer conveniences: templates are loaded from the
+	// templates/ directory on disk with mtime-based hot reload instead of the
+	// embedded copy.
+	Dev bool
+	// DataDir persists all runtime data — session metadata (JSON), intercepted
+	// payloads and the request log — under this directory, so the journal and
+	// log feed survive restarts. Empty keeps sessions in memory and payloads
+	// in a temporary directory.
+	DataDir string
 }
 
 // DefaultListenAddress derives the listen address from PORT, falling back to
@@ -47,6 +56,7 @@ func DefaultListenAddress() (addr, invalidPort string) {
 
 // RunWithOptions starts the gateway and blocks until the HTTP server exits.
 func RunWithOptions(opts Options) error {
+	devTemplates.Store(opts.Dev)
 	if opts.Timeout < 0 {
 		return errors.New("timeout must be zero or greater")
 	}
@@ -61,7 +71,7 @@ func RunWithOptions(opts Options) error {
 		return err
 	}
 
-	settings, err := loadSettings(opts.ConfigPath)
+	settings, err := loadSettings(FileConfig(opts.ConfigPath))
 	if err != nil {
 		return err
 	}
@@ -73,45 +83,69 @@ func RunWithOptions(opts Options) error {
 	if err != nil {
 		return err
 	}
-	hub := newLogHub()
-	sessions := newSessionHub()
+	var hub *logHub
+	if opts.DataDir != "" {
+		hub = newLogHubPersistent(opts.DataDir)
+	} else {
+		hub = newLogHub()
+	}
+	defer hub.close()
+	var sessions *sessionHub
+	if opts.DataDir != "" {
+		sessions = newSessionHubPersistent(opts.DataDir)
+	} else {
+		sessions = newSessionHub()
+	}
 	defer sessions.close()
 	logSink := io.Writer(hub)
 	if opts.LogStderr {
 		logSink = io.MultiWriter(os.Stderr, hub)
 	}
 	logger := slog.New(slog.NewJSONHandler(logSink, nil))
-	client := newHTTPClient(opts.Timeout)
+	client := newHTTPClient(opts.Timeout, nil)
 	if migrated {
 		settings.Upstreams = upstreams
 		encoded, marshalErr := yaml.Marshal(settings)
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if writeErr := os.WriteFile(opts.ConfigPath, encoded, 0600); writeErr != nil {
+		if writeErr := FileConfig(opts.ConfigPath).Write(encoded, 0600); writeErr != nil {
 			logger.Error("failed to rewrite config with secret references", "path", opts.ConfigPath, "error", writeErr.Error())
 		} else {
 			logger.Info("externalized auth values into memory; open the management UI to keep them in the browser", "config", opts.ConfigPath)
 		}
 	}
-	proxy := &Proxy{Upstreams: upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: opts.ConfigPath, LogHub: hub, Sessions: sessions, AllowDebug: opts.AllowDebug, Debug: settings.Debug && opts.AllowDebug, SecretValues: secretValues}
+	proxy := &Proxy{Upstreams: upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: FileConfig(opts.ConfigPath), LogHub: hub, Sessions: sessions, AllowDebug: opts.AllowDebug, Debug: settings.Debug && opts.AllowDebug, SecretValues: secretValues}
 
-	handler := requestLogger(logger, proxy)
 	if adminUser != "" {
-		handler = basicAuth(logger, adminUser, adminPassword, handler)
 		logger.Info("management auth enabled", "username", adminUser)
 	}
 	server := &http.Server{
 		Addr:              opts.Listen,
-		Handler:           recoverJSON(logger, handler),
+		Handler:           gatewayHandler(logger, proxy, adminUser, adminPassword),
 		ErrorLog:          slog.NewLogLogger(slog.NewJSONHandler(logSink, nil), slog.LevelError),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	logger.Info("server listening", "addr", opts.Listen, "upstreams", len(settings.Upstreams), "debug", proxy.Debug)
+	if opts.Dev {
+		logger.Info("dev mode: templates loaded from disk with hot reload", "dir", "templates")
+	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// gatewayHandler builds the complete HTTP middleware chain (request logging,
+// management Basic Auth, panic recovery) around the proxy. It does not depend
+// on a net.Listener, so the same handler can be served by net/http on a real
+// socket or by a custom transport such as a js/wasm bridge.
+func gatewayHandler(logger Logger, proxy *Proxy, adminUser, adminPassword string) http.Handler {
+	handler := requestLogger(logger, proxy)
+	if adminUser != "" {
+		handler = basicAuth(logger, adminUser, adminPassword, handler)
+	}
+	return recoverJSON(logger, handler)
 }
 
 // Run parses command-line arguments and starts the gateway. It exists for
@@ -126,6 +160,8 @@ func Run(args []string) error {
 	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables it")
 	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "honor debug: true from the client config and log request headers; without it debug stays off")
 	flags.BoolVar(&opts.LogStderr, "log-stderr", false, "also write logs to stderr")
+	flags.BoolVar(&opts.Dev, "dev", false, "dev mode: load templates from disk with hot reload")
+	flags.StringVar(&opts.DataDir, "data-dir", "", "persist sessions, payloads and logs to this directory")
 	flags.StringVar(&opts.AdminUser, "admin-user", "", "Basic Auth username for the management UI (env: AGW_ADMIN_USER; must be paired with --admin-password)")
 	flags.StringVar(&opts.AdminPassword, "admin-password", "", "Basic Auth password for the management UI (env: AGW_ADMIN_PASSWORD)")
 	if err := flags.Parse(args); err != nil {
@@ -160,10 +196,13 @@ func managementCredentials(opts Options) (user, password string, err error) {
 	return user, password, nil
 }
 
-func newHTTPClient(timeout time.Duration) *http.Client {
+func newHTTPClient(timeout time.Duration, transport http.RoundTripper) *http.Client {
 	client := &http.Client{}
 	if timeout > 0 {
 		client.Timeout = timeout
+	}
+	if transport != nil {
+		client.Transport = transport
 	}
 	return client
 }

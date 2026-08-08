@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -211,10 +212,10 @@ func TestRunRejectsUnknownFlag(t *testing.T) {
 }
 
 func TestDefaultHTTPClientHasNoOverallTimeout(t *testing.T) {
-	if got := newHTTPClient(0).Timeout; got != 0 {
+	if got := newHTTPClient(0, nil).Timeout; got != 0 {
 		t.Fatalf("default timeout = %s, want 0", got)
 	}
-	if got := newHTTPClient(2 * time.Minute).Timeout; got != 2*time.Minute {
+	if got := newHTTPClient(2*time.Minute, nil).Timeout; got != 2*time.Minute {
 		t.Fatalf("configured timeout = %s", got)
 	}
 }
@@ -242,7 +243,7 @@ func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
 		{Name: "d1v-backup", AppSelectors: []string{"codex-luna"}},
 	}
 	request := http.Header{"User-Agent": []string{"Codex/1.0"}}
-	routed, selected, err := routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, request, nil)
+	routed, selected, err := routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", nil, request, nil)
 	if err != nil || selected != "codex-luna" || len(routed) != 2 {
 		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -250,7 +251,7 @@ func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
 		t.Fatalf("non-compatible upstream entered retry chain: %#v", routed)
 	}
 
-	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, http.Header{"User-Agent": []string{"OpenAI/1.0"}}, nil)
+	routed, selected, err = routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", nil, http.Header{"User-Agent": []string{"OpenAI/1.0"}}, nil)
 	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
 		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -265,12 +266,12 @@ func TestBodySelectorRoutesByModelField(t *testing.T) {
 		{Name: "deepseek", AppSelectors: []string{"deepseek-model"}},
 		{Name: "luna", AppSelectors: []string{"default"}},
 	}
-	routed, selected, err := routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"deepseek","messages":[]}`))
+	routed, selected, err := routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"deepseek","messages":[]}`))
 	if err != nil || selected != "deepseek-model" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
 		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
 	}
 
-	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"gpt-5.6-luna","messages":[]}`))
+	routed, selected, err = routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"gpt-5.6-luna","messages":[]}`))
 	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "luna" {
 		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -278,29 +279,29 @@ func TestBodySelectorRoutesByModelField(t *testing.T) {
 
 func TestBodySelectorNestedFieldPrefixAndCase(t *testing.T) {
 	selector := AppSelector{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "metadata.provider", Operator: "prefix", Value: "Deep"}}}}
-	if !appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"deepseek"}}`)) {
+	if !appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"deepseek"}}`)) {
 		t.Fatal("nested case-insensitive prefix should match")
 	}
-	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"openai"}}`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"openai"}}`)) {
 		t.Fatal("prefix rule matched an unrelated value")
 	}
-	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`not json`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`not json`)) {
 		t.Fatal("non-JSON body must not match")
 	}
-	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"metadata":42}`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"metadata":42}`)) {
 		t.Fatal("missing nested field must not match")
 	}
-	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"metadata":{"provider":null}}`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"metadata":{"provider":null}}`)) {
 		t.Fatal("null value must not match")
 	}
 }
 
 func TestBodySelectorPresentAndValidation(t *testing.T) {
 	selector := AppSelector{Name: "stream", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "stream", Operator: "present"}}}}
-	if !appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"stream":true}`)) {
+	if !appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"stream":true}`)) {
 		t.Fatal("present rule should match when field exists")
 	}
-	if appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x"}`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, []byte(`{"model":"x"}`)) {
 		t.Fatal("present rule matched a missing field")
 	}
 	_, err := parseSettings([]byte(`appSelectors:
@@ -316,6 +317,37 @@ upstreams:
 `))
 	if err == nil || !strings.Contains(err.Error(), "invalid regex") {
 		t.Fatalf("invalid body regex error = %v", err)
+	}
+}
+
+func TestAppSelectorMethodFilter(t *testing.T) {
+	selector := AppSelector{Name: "write", Methods: []string{"POST", "PUT"}}
+	if !appSelectorMatches(selector, "post", "/v1/chat/completions", nil, http.Header{}, nil) {
+		t.Fatal("lowercase request method must match case-insensitively")
+	}
+	if !appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{}, nil) {
+		t.Fatal("configured method must match")
+	}
+	if appSelectorMatches(selector, "GET", "/v1/chat/completions", nil, http.Header{}, nil) {
+		t.Fatal("unconfigured method must not match")
+	}
+	if !appSelectorMatches(AppSelector{Name: "any"}, "GET", "/v1/chat/completions", nil, http.Header{}, nil) {
+		t.Fatal("selector without methods must match any method")
+	}
+
+	settings := Settings{
+		AppSelectors: []AppSelector{{Name: "s", Methods: []string{"post"}}},
+		Upstreams:    []Upstream{{URL: "https://example.com"}},
+	}
+	if err := validateSettings(&settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.AppSelectors[0].Methods[0] != "POST" {
+		t.Fatalf("method not normalized: %#v", settings.AppSelectors[0].Methods)
+	}
+	settings.AppSelectors[0].Methods = []string{"POST PUT"}
+	if err := validateSettings(&settings); err == nil {
+		t.Fatal("invalid method token must be rejected")
 	}
 }
 
@@ -542,7 +574,7 @@ upstreams:
 
 func TestAppSelectorWithoutRulesMatchesAllRequests(t *testing.T) {
 	selector := AppSelector{Name: "catch-all"}
-	if !appSelectorMatches(selector, "/v1/chat/completions", nil, http.Header{"User-Agent": []string{"Codex/1.0"}}, nil) {
+	if !appSelectorMatches(selector, "POST", "/v1/chat/completions", nil, http.Header{"User-Agent": []string{"Codex/1.0"}}, nil) {
 		t.Fatal("AppSelector without header rules should match every request")
 	}
 }
@@ -570,7 +602,7 @@ func TestPathSelectorRoutesByAPI(t *testing.T) {
 		{"/v1/responses", "responses-api", []string{"openai", "openai-chat"}},
 	}
 	for _, tt := range tests {
-		routed, selected, err := routeUpstreams(upstreams, selectors, tt.path, nil, http.Header{}, nil)
+		routed, selected, err := routeUpstreams(upstreams, selectors, "POST", tt.path, nil, http.Header{}, nil)
 		if err != nil || selected != tt.selector {
 			t.Fatalf("path %s: routed=%#v selector=%q error=%v", tt.path, routed, selected, err)
 		}
@@ -588,7 +620,7 @@ func TestPathSelectorRoutesByAPI(t *testing.T) {
 		}
 	}
 
-	if _, _, err := routeUpstreams(upstreams, selectors, "/v1/embeddings", nil, http.Header{}, nil); err == nil {
+	if _, _, err := routeUpstreams(upstreams, selectors, "POST", "/v1/embeddings", nil, http.Header{}, nil); err == nil {
 		t.Fatal("unmatched path should fail routing")
 	}
 }
@@ -662,15 +694,15 @@ func TestQuerySelectorRoutesByParam(t *testing.T) {
 		{Name: "fallback", AppSelectors: []string{"default"}},
 	}
 
-	routed, selected, err := routeUpstreams(upstreams, selectors, "/v1/chat/completions", url.Values{"api-version": []string{"2024-02-15"}}, http.Header{}, nil)
+	routed, selected, err := routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", url.Values{"api-version": []string{"2024-02-15"}}, http.Header{}, nil)
 	if err != nil || selected != "by-version" || len(routed) != 1 || routed[0].Upstream.Name != "v2024" {
 		t.Fatalf("version route = %#v selector=%q error=%v", routed, selected, err)
 	}
-	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", url.Values{"model": []string{"deepseek"}}, http.Header{}, nil)
+	routed, selected, err = routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", url.Values{"model": []string{"deepseek"}}, http.Header{}, nil)
 	if err != nil || selected != "by-model" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
 		t.Fatalf("model route = %#v selector=%q error=%v", routed, selected, err)
 	}
-	routed, selected, err = routeUpstreams(upstreams, selectors, "/v1/chat/completions", url.Values{}, http.Header{}, nil)
+	routed, selected, err = routeUpstreams(upstreams, selectors, "POST", "/v1/chat/completions", url.Values{}, http.Header{}, nil)
 	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "fallback" {
 		t.Fatalf("default route = %#v selector=%q error=%v", routed, selected, err)
 	}
@@ -772,18 +804,18 @@ func TestDisabledRulesAreSkipped(t *testing.T) {
 			Body:    []BodyMatch{{Field: "model", Operator: "exact", Value: "blocked", Enabled: &disabled}},
 		},
 	}
-	if !appSelectorMatches(selector, "/v1/chat/completions", url.Values{"model": []string{"blocked"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
+	if !appSelectorMatches(selector, "POST", "/v1/chat/completions", url.Values{"model": []string{"blocked"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
 		t.Fatal("disabled rules must not block a selector")
 	}
 
 	// Enabled rules still apply.
 	selector.Match.Headers[0].Enabled = &enabled
-	if appSelectorMatches(selector, "/v1/chat/completions", url.Values{"model": []string{"blocked"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", url.Values{"model": []string{"blocked"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
 		t.Fatal("enabled header rule should still block a non-matching request")
 	}
 	selector.Match.Headers[0].Enabled = &disabled
 	selector.Match.Query[0].Enabled = &enabled
-	if appSelectorMatches(selector, "/v1/chat/completions", url.Values{"model": []string{"other"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
+	if appSelectorMatches(selector, "POST", "/v1/chat/completions", url.Values{"model": []string{"other"}}, http.Header{"User-Agent": []string{"Codex/1.0"}}, []byte(`{"model":"blocked"}`)) {
 		t.Fatal("enabled query rule should still block a non-matching request")
 	}
 
@@ -1037,7 +1069,7 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 		Upstreams:  []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
 		Client:     http.DefaultClient,
 		Logger:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		Config:     configPath,
+		Config:     FileConfig(configPath),
 		AllowDebug: true,
 	}
 	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"appSelectors":[{"name":"codex","match":{"headers":[{"name":"User-Agent","operator":"regex","value":"^Codex","caseSensitive":true}]}}],"upstreams":[{"url":"https://new.example","appSelectors":["codex"],"authorization":{"type":"none"}}]}`))
@@ -1050,7 +1082,7 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 	if !proxy.Debug || len(proxy.Upstreams) != 1 || proxy.Upstreams[0].URL != "https://new.example" || len(proxy.AppSelectors) != 1 || !proxy.AppSelectors[0].Match.Headers[0].CaseSensitive {
 		t.Fatalf("runtime settings were not updated: debug=%t upstreams=%#v selectors=%#v", proxy.Debug, proxy.Upstreams, proxy.AppSelectors)
 	}
-	settings, err := loadSettings(configPath)
+	settings, err := loadSettings(FileConfig(configPath))
 	if err != nil || !settings.Debug || settings.Upstreams[0].URL != "https://new.example" || !settings.AppSelectors[0].Match.Headers[0].CaseSensitive {
 		t.Fatalf("saved settings = %#v, error = %v", settings, err)
 	}
@@ -1065,7 +1097,7 @@ func TestUpdateConfigDebugRequiresAllowDebug(t *testing.T) {
 		Upstreams: []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
 		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		Config:    configPath,
+		Config:    FileConfig(configPath),
 		Debug:     true, // loaded from disk but --allow-debug was not passed
 	}
 	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"upstreams":[{"url":"https://new.example","authorization":{"type":"none"}}],"appSelectors":[]}`))
@@ -1078,7 +1110,7 @@ func TestUpdateConfigDebugRequiresAllowDebug(t *testing.T) {
 	if proxy.Debug {
 		t.Fatalf("client debug change must not take effect without AllowDebug: debug=%t", proxy.Debug)
 	}
-	settings, err := loadSettings(configPath)
+	settings, err := loadSettings(FileConfig(configPath))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1160,8 +1192,8 @@ func TestSessionHubTracksLifecycleAndRedactsHeaders(t *testing.T) {
 	if !strings.Contains(content, `data-payload-open="request"`) || !strings.Contains(content, `data-payload-open="response"`) || !strings.Contains(content, "data-payload-buttons") {
 		t.Fatalf("session card does not include the payload open buttons: %s", content)
 	}
-	if !strings.Contains(content, `<span class="session-metric session-transfer"><small>latest transfer</small><strong>2.0 KB</strong></span>`) {
-		t.Fatalf("session card does not include the latest transfer summary: %s", content)
+	if !strings.Contains(content, `<span class="session-metric session-send"><small>send</small><strong>26.0 KB</strong></span>`) || !strings.Contains(content, `<span class="session-metric session-receive"><small>receive</small><strong>15 B</strong></span>`) {
+		t.Fatalf("session card does not include the send/receive summary: %s", content)
 	}
 	capturedRequestBody, found, err := hub.readPayload(cards[0].ID, "request", 0)
 	if err != nil || !found || !bytes.Equal(capturedRequestBody, requestBody) {
@@ -1304,7 +1336,8 @@ func TestSessionHubEvictsOldRecordsAndFiles(t *testing.T) {
 	if count != maxSessionCards {
 		t.Fatalf("records = %d, want %d", count, maxSessionCards)
 	}
-	entries, err := os.ReadDir(hub.payloadDir)
+	store := hub.payloads.(*filePayloadStore)
+	entries, err := os.ReadDir(store.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1363,6 +1396,142 @@ func TestSessionPayloadFullEndpointReturnsWholeFile(t *testing.T) {
 	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/request?full=1", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("missing request file status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestMemoryPayloadStoreRoundTrip(t *testing.T) {
+	store := MemoryPayloads()
+	defer store.Close()
+	file, err := store.Create("key.response")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("hello ")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.Write([]byte("world")); err != nil {
+		t.Fatal(err)
+	}
+	if got := file.Size(); got != 11 {
+		t.Fatalf("payload size = %d, want 11", got)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := store.Read("key.response", 0)
+	if err != nil || string(data) != "hello world" {
+		t.Fatalf("read = %q err=%v", data, err)
+	}
+	tail, err := store.Read("key.response", 5)
+	if err != nil || string(tail) != "world" {
+		t.Fatalf("tail = %q err=%v", tail, err)
+	}
+	if err := store.WriteRequest("key.request", []byte("req")); err != nil {
+		t.Fatal(err)
+	}
+	req, err := store.Read("key.request", 0)
+	if err != nil || string(req) != "req" {
+		t.Fatalf("request = %q err=%v", req, err)
+	}
+	if err := store.Remove("key.response"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read("key.response", 0); err == nil {
+		t.Fatal("removed payload must not be readable")
+	}
+}
+
+func TestMemoryConfigStore(t *testing.T) {
+	store := MemoryConfig()
+	config := "debug: true\nupstreams:\n- url: https://example.com\n  authorization:\n    type: none\n"
+	if err := store.Write([]byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := loadSettings(store)
+	if err != nil || !settings.Debug || len(settings.Upstreams) != 1 {
+		t.Fatalf("memory config settings = %#v err=%v", settings, err)
+	}
+}
+
+func TestSessionHubWithMemoryPayloads(t *testing.T) {
+	hub := newSessionHubWith(MemoryPayloads())
+	defer hub.close()
+	request := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	tracked := hub.start(request)
+	body := []byte(`{"model":"deepseek"}`)
+	tracked.setRequestBody("application/json", body)
+	tracked.setContentType("text/plain")
+	tracked.captureResponse([]byte("chunk1"))
+	tracked.captureResponse([]byte("chunk2"))
+	tracked.complete(200, 12, nil)
+
+	record := hub.records[tracked.sessionID]
+	latest := record.Requests[len(record.Requests)-1]
+	if latest.RequestBytes != int64(len(body)) || latest.ResponseBytes != 12 {
+		t.Fatalf("bytes not tracked: req=%d resp=%d", latest.RequestBytes, latest.ResponseBytes)
+	}
+	data, found, err := hub.readPayload(tracked.sessionID, "response", 0)
+	if err != nil || !found || string(data) != "chunk1chunk2" {
+		t.Fatalf("response payload = %q found=%t err=%v", data, found, err)
+	}
+}
+
+func TestSessionPersistenceAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	hub := newSessionHubPersistent(dir)
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	tracked := hub.start(request)
+	body := []byte(`{"model":"deepseek"}`)
+	tracked.setRequestBody("application/json", body)
+	tracked.setContentType("text/plain")
+	tracked.captureResponse([]byte("chunk-one"))
+	tracked.captureResponse([]byte("chunk-two"))
+	tracked.complete(200, 12, nil)
+	sessionID := tracked.sessionID
+	hub.close()
+
+	restarted := newSessionHubPersistent(dir)
+	defer restarted.close()
+	record, ok := restarted.records[sessionID]
+	if !ok || len(record.Requests) != 1 {
+		t.Fatalf("record not restored: %#v", record)
+	}
+	latest := record.Requests[len(record.Requests)-1]
+	if latest.State != "completed" || latest.ResponsePayload != nil {
+		t.Fatalf("restored request state = %q payload=%v", latest.State, latest.ResponsePayload)
+	}
+	data, found, err := restarted.readPayload(sessionID, "response", 0)
+	if err != nil || !found || string(data) != "chunk-onechunk-two" {
+		t.Fatalf("response payload after restart = %q found=%t err=%v", data, found, err)
+	}
+	reqData, found, err := restarted.readPayload(sessionID, "request", 0)
+	if err != nil || !found || !bytes.Equal(reqData, body) {
+		t.Fatalf("request payload after restart = %q found=%t err=%v", reqData, found, err)
+	}
+}
+
+func TestLogHubPersistenceAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	hub := newLogHubPersistent(dir)
+	for i := 0; i < 3; i++ {
+		if _, err := hub.Write([]byte(fmt.Sprintf("line-%d\n", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub.close()
+
+	restarted := newLogHubPersistent(dir)
+	defer restarted.close()
+	_, history := restarted.subscribe()
+	if len(history) != 3 || history[0] != "line-0" || history[2] != "line-2" {
+		t.Fatalf("restored history = %#v", history)
+	}
+	if _, err := restarted.Write([]byte("line-3\n")); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dir + "/logs.jsonl")
+	if err != nil || !strings.Contains(string(data), "line-3") {
+		t.Fatalf("appended log file = %q err=%v", data, err)
 	}
 }
 
@@ -1456,6 +1625,34 @@ func TestBasicAuthProtectsManagementPaths(t *testing.T) {
 	}
 }
 
+func TestGatewayHandlerWorksWithoutListener(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	proxy := &Proxy{
+		Client: http.DefaultClient,
+		Logger: logger,
+	}
+	handler := gatewayHandler(logger, proxy, "", "")
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("open gateway page status = %d", recorder.Code)
+	}
+
+	secured := gatewayHandler(logger, proxy, "admin", "secret")
+	recorder = httptest.NewRecorder()
+	secured.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated management request = %d", recorder.Code)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/config", nil)
+	request.SetBasicAuth("admin", "secret")
+	recorder = httptest.NewRecorder()
+	secured.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("authenticated management request = %d", recorder.Code)
+	}
+}
+
 func secretValuesContain(values map[string]string, want string) bool {
 	for _, value := range values {
 		if value == want {
@@ -1471,7 +1668,7 @@ func TestConfigYAMLViewAndImport(t *testing.T) {
 		AppSelectors: []AppSelector{{Name: "chat", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/chat/completions"}}}}},
 		Debug:        true,
 		AllowDebug:   true,
-		Config:       t.TempDir() + "/config.yaml",
+		Config:       FileConfig(t.TempDir() + "/config.yaml"),
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 
@@ -1518,7 +1715,7 @@ func TestConfigYAMLNeverLeaksSecrets(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:key1"}}},
 		SecretValues: map[string]string{"key1": "sk-super-secret"},
-		Config:       t.TempDir() + "/config.yaml",
+		Config:       FileConfig(t.TempDir() + "/config.yaml"),
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	// The config export is always the disk form (refs only), even if a merge
@@ -1581,7 +1778,7 @@ func TestConfigYAMLDoesNotLeakSecretValues(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:openai"}}},
 		SecretValues: map[string]string{"openai": "sk-super-secret"},
-		Config:       t.TempDir() + "/config.yaml",
+		Config:       FileConfig(t.TempDir() + "/config.yaml"),
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	recorder := httptest.NewRecorder()
@@ -1600,7 +1797,7 @@ func TestConfigUpdatePreservesSecretReferences(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:openai"}}},
 		SecretValues: map[string]string{"openai": "sk-original"},
-		Config:       configPath,
+		Config:       FileConfig(configPath),
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		AllowDebug:   true,
 	}
@@ -1633,7 +1830,7 @@ func TestConfigUpdatePreservesSecretReferences(t *testing.T) {
 func TestConfigSecretsEndpoints(t *testing.T) {
 	proxy := &Proxy{
 		SecretValues: map[string]string{"key1": "sk-one"},
-		Config:       t.TempDir() + "/config.yaml",
+		Config:       FileConfig(t.TempDir() + "/config.yaml"),
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	recorder := httptest.NewRecorder()
@@ -1756,7 +1953,7 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("config page Cache-Control = %q, want no-store", got)
 	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-table-head", ">Rules<", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<", "data-payload-modal", "data-log-pretty", "data-log-connection", "yaml-config", "data-config-modal", "data-config-yaml", "data-config-yaml-merged", "secrets-config", "data-secrets-modal", "data-secrets-yaml", "data-session-count", "data-selector-tab-count", "data-upstream-tab-count", "data-log-count", `class="tab-count"`, `class="add-row"`, `id="add-selector"`, `id="routing-tab"`, `id="selectors-tab"`, `data-telemetry-tab="routing"`, `data-telemetry-tab="selectors"`, `id="routing-panel" role="tabpanel" aria-labelledby="routing-tab" hidden`, `id="selectors-panel" role="tabpanel" aria-labelledby="selectors-tab"`, `id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab" hidden`, "viewFromHash", "hashchange", "location.hash", "scheduleSessionReconcile", "sessionGestureActive", "lastSessionHTML"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "Compatible AppSelectors", "selector-table-head", ">Rules<", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Send<", ">Receive<", ">Duration<", "data-payload-modal", "data-log-pretty", "data-log-connection", "yaml-config", "data-config-modal", "data-config-yaml", "data-config-yaml-merged", "secrets-config", "data-secrets-modal", "data-secrets-yaml", "data-session-count", "data-selector-tab-count", "data-upstream-tab-count", "data-log-count", `class="tab-count"`, `class="add-row"`, `id="add-selector"`, `id="routing-tab"`, `id="selectors-tab"`, `data-telemetry-tab="routing"`, `data-telemetry-tab="selectors"`, `id="routing-panel" role="tabpanel" aria-labelledby="routing-tab" hidden`, `id="selectors-panel" role="tabpanel" aria-labelledby="selectors-tab"`, `id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab" hidden`, "viewFromHash", "hashchange", "location.hash", "scheduleSessionReconcile", "sessionGestureActive", "lastSessionHTML", "data-tab-menu-button", `class="tab-menu-button"`, "closeTabMenu", "hamburger-mode", "updateTabLayoutMode", `rel="manifest"`, "og:title", `name="theme-color"`, `rel="icon" href="/favicon.ico"`, "apple-touch-icon", "icon-512.png", `>AppSelector<`, `>Routing<`, `>Sessions<`, `>Logs<`, `data-rule-type-option="method"`} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
 		}
@@ -1765,7 +1962,7 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("all four workspace tabs should carry a live indicator")
 	}
 	if strings.Index(content, `id="selectors-tab"`) > strings.Index(content, `id="routing-tab"`) {
-		t.Fatalf("AppSelector registry should be the first tab")
+		t.Fatalf("AppSelector should be the first tab")
 	}
 	for _, expected := range []string{"data-rule", "data-rule-type", "rule-kind", "data-add-rule", "data-rule-type-option", `data-rule-type-option="query"`, "data-rule-enabled", "data-rule-delete", "data-rule-empty", "rule-switch"} {
 		if !strings.Contains(content, expected) {
@@ -1824,6 +2021,50 @@ func TestConfigPageDebugToggleState(t *testing.T) {
 	content = recorder.Body.String()
 	if strings.Contains(content, `class="debug-toggle"`) {
 		t.Fatalf("debug toggle must be hidden entirely without --allow-debug")
+	}
+}
+
+func TestConfigPageRendersMethodRule(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), []AppSelector{{Name: "write", Methods: []string{"POST", "PUT"}}}, false, true)
+	content := recorder.Body.String()
+	for _, expected := range []string{`data-rule-type="method"`, `data-method="POST" checked`, `data-method="PUT" checked`, `data-method="DELETE"`} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page missing method rule %q", expected)
+		}
+	}
+	if strings.Contains(content, `data-method="GET" checked`) || strings.Contains(content, `data-method="DELETE" checked`) {
+		t.Fatalf("unconfigured methods must not be checked")
+	}
+}
+
+func TestPWAAssetsServed(t *testing.T) {
+	proxy := &Proxy{Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
+	tests := []struct {
+		path        string
+		contentType string
+	}{
+		{"/manifest.json", "application/manifest+json"},
+		{"/favicon.ico", "image/x-icon"},
+		{"/favicon.svg", "image/svg+xml"},
+		{"/icon-192.png", "image/png"},
+		{"/icon-512.png", "image/png"},
+	}
+	for _, tt := range tests {
+		recorder := httptest.NewRecorder()
+		proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, tt.path, nil))
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s status = %d", tt.path, recorder.Code)
+		}
+		if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, tt.contentType) {
+			t.Fatalf("%s content type = %q, want prefix %q", tt.path, got, tt.contentType)
+		}
+		if recorder.Body.Len() == 0 {
+			t.Fatalf("%s served empty body", tt.path)
+		}
+		if got := recorder.Header().Get("Cache-Control"); got == "" {
+			t.Fatalf("%s missing Cache-Control", tt.path)
+		}
 	}
 }
 

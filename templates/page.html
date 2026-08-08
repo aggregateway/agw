@@ -1,0 +1,1221 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AGW Control</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#12312d">
+  <link rel="icon" href="/favicon.ico" sizes="32x32">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <meta property="og:title" content="AGW">
+  <meta property="og:type" content="website">
+  <meta property="og:description" content="Configured HTTP reverse proxy gateway for AI APIs with routing selectors, body rewriting and a live session journal.">
+  <meta property="og:url" content="{{.OGURL}}">
+  <meta property="og:image" content="{{.OGImage}}">
+  <script>try { document.documentElement.dataset.theme = localStorage.getItem('agw-theme') || 'light'; } catch (_) { document.documentElement.dataset.theme = 'light'; }</script>
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
+  <script src="https://unpkg.com/lucide@0.468.0"></script>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root[data-theme="light"] { color-scheme: light; }
+    * { box-sizing: border-box; }
+    .sr-only { position: absolute; inset: 0; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    body { margin: 0; color: #1b2927; background: #eef2f0; }
+    button, input, select { font: inherit; }
+    .shell { width: min(1220px, calc(100% - 40px)); margin: 28px auto 40px; }
+    .telemetry-top { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 12px 0; color: #213633; background: #e9efec; border-bottom: 1px solid #d7e0dc; }
+    .telemetry-top .identity, .telemetry-top .appbar-actions { padding-top: 8px; padding-bottom: 8px; }
+    .telemetry-top .identity { flex: 0 0 auto; }
+    .telemetry-top .appbar-actions { flex: 0 0 auto; margin-left: auto; }
+    .telemetry-top .telemetry-tabbar { flex: 1 1 auto; align-self: stretch; min-width: 0; justify-content: flex-start; align-items: stretch; gap: 3px; padding: 0; background: transparent; border: 0; }
+    .telemetry-top .telemetry-tab { display: inline-flex; height: 100%; min-height: 0; align-items: center; gap: 7px; margin: 0 0 -1px; padding: 0 14px; color: #60736d; background: transparent; border: 1px solid transparent; border-bottom: 0; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .telemetry-top .telemetry-tab:hover { color: #2e5b51; background: rgba(255, 255, 255, .46); }
+    .telemetry-top .telemetry-tab[aria-selected="true"] { color: #173d34; background: #fff; border-color: #d7e0dc; box-shadow: 0 -1px 2px rgba(21, 47, 40, .06); }
+    .telemetry-top .telemetry-tab:focus-visible { outline: 2px solid #62a58d; outline-offset: 1px; }
+    .telemetry-top .tab-count { color: #2e5b51; background: rgba(46, 91, 81, .10); }
+    .telemetry-top .tab-connection { color: #7c918a; }
+    .telemetry-top .debug-toggle { color: #53716a; }
+    .tab-menu-button { display: none; }
+    .telemetry-top.hamburger-mode .tab-menu-button { display: inline-grid; width: 34px; height: 34px; place-items: center; color: #53716a; background: transparent; border: 1px solid transparent; border-radius: 6px; cursor: pointer; }
+    .telemetry-top.hamburger-mode .tab-menu-button:hover { color: #176d59; background: rgba(46, 91, 81, .08); }
+    .telemetry-top.hamburger-mode .telemetry-tabbar { position: absolute; top: calc(100% + 4px); left: 10px; right: auto; bottom: auto; z-index: 40; display: none; pointer-events: auto; flex-direction: column; align-items: stretch; gap: 2px; min-width: 220px; padding: 6px; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .12); }
+    .telemetry-top.hamburger-mode .telemetry-tabbar.open { display: flex; }
+    .telemetry-top.hamburger-mode .telemetry-tab { height: auto; min-height: 38px; margin: 0; border: 0; border-radius: 6px; }
+    .telemetry-top.hamburger-mode .telemetry-tab[aria-selected="true"] { border: 0; box-shadow: none; }
+    .identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .brand-mark { display: grid; width: 34px; height: 34px; place-items: center; flex: 0 0 34px; color: #17302b; background: #cbe86b; border-radius: 6px; font-size: 12px; font-weight: 800; letter-spacing: 0; }
+    .appbar-actions { display: flex; align-items: center; gap: 8px; }
+    .debug-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 8px; color: #d7e6e1; cursor: pointer; font-size: 13px; white-space: nowrap; }
+    .debug-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+    .switch { display: inline-flex; width: 30px; height: 18px; align-items: center; padding: 2px; background: #41635d; border-radius: 999px; transition: background .16s ease; }
+    .switch::after { width: 14px; height: 14px; background: #f7fbf9; border-radius: 50%; content: ""; transition: transform .16s ease; }
+    .debug-toggle input:checked + .switch { background: #8eb637; }
+    .debug-toggle input:checked + .switch::after { transform: translateX(12px); }
+    .icon-button { display: inline-grid; width: 34px; height: 34px; place-items: center; padding: 0; color: #31524b; background: #fff; border: 1px solid #c8d4d0; border-radius: 5px; cursor: pointer; transition: background .15s ease, border-color .15s ease, color .15s ease; }
+    .icon-button svg { width: 16px; height: 16px; }
+    .icon-button:hover { color: #176d59; background: #f2f8f5; border-color: #8fb7aa; }
+    .icon-button:focus-visible, .field-input:focus, .auth-select:focus { outline: 2px solid #62a58d; outline-offset: 1px; }
+    .icon-button.save { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    .icon-button.save:hover { background: #b9d755; border-color: #b9d755; }
+    .icon-button.danger { color: #9e3e3e; }
+    .icon-button.danger:hover { color: #862f2f; background: #fff1f0; border-color: #e3aaa5; }
+    .icon-button:disabled { opacity: .38; cursor: not-allowed; }
+    .icon-button:disabled:hover { color: inherit; background: inherit; border-color: inherit; }
+    .add-row { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: center; gap: 6px; padding: 8px; color: #53716a; background: transparent; border: 1px dashed #c9d6d1; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700; }
+    .add-row:hover { color: #176d59; background: #f2f8f5; border-color: #8fb7aa; }
+    .add-row svg { width: 15px; height: 15px; }
+    tfoot .add-row-cell { padding: 2px 2px 8px; }
+    #status { min-width: 72px; color: #637570; font-size: 12px; text-align: right; }
+    #status.error { color: #a83e3e; }
+    #status.success { color: #267d63; }
+    .table-scroll { overflow-x: auto; padding: 0 10px 10px; background: #f7faf8; }
+    table { width: 100%; min-width: 0; border-collapse: separate; border-spacing: 0 8px; table-layout: fixed; }
+    th, td { padding: 12px 14px; text-align: left; vertical-align: middle; }
+    th { padding-block: 5px 7px; color: #778984; background: transparent; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+    th.priority, td.priority { width: 76px; text-align: center; white-space: nowrap; }
+    th.name { width: 14%; }
+    th.endpoint { width: 27%; }
+    th.authentication { width: 24%; }
+    th.app-selectors { width: 18%; }
+    th.row-actions, td.row-actions { width: 96px; text-align: center; white-space: nowrap; }
+    td.row-actions .icon-button + .icon-button { margin-left: 6px; }
+    tr[data-row] td { background: #fff; border-top: 1px solid #dce5e1; border-bottom: 1px solid #dce5e1; }
+    tr[data-row] td:first-child { border-left: 1px solid #dce5e1; border-radius: 6px 0 0 6px; }
+    tr[data-row] td:last-child { border-right: 1px solid #dce5e1; border-radius: 0 6px 6px 0; }
+    tr[data-row]:hover td { background: #fbfdfc; border-color: #bdcdc6; }
+    tr[data-row], .selector-row { transition: transform .18s ease, opacity .16s ease, border-color .16s ease, background .16s ease; }
+    tr.dragging, .selector-row.dragging { opacity: .34; filter: saturate(.65); }
+    .drag-handle { display: inline-grid; width: 28px; height: 32px; place-items: center; color: #91a29d; cursor: grab; user-select: none; }
+    .drag-handle svg { width: 16px; height: 16px; }
+    .field-input, .auth-select { width: 100%; height: 34px; min-width: 0; padding: 6px 8px; color: #203330; background: transparent; border: 1px solid transparent; border-radius: 4px; }
+    .field-input { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
+    .field-input:hover, .auth-select:hover, .field-input:focus, .auth-select:focus { background: #fff; border-color: #b8c9c3; }
+    .field-input:disabled { color: #8aa09a; opacity: .62; cursor: not-allowed; background: transparent; border-color: transparent; }
+    .auth { display: grid; grid-template-columns: 112px minmax(0, 1fr) 34px; gap: 7px; align-items: center; }
+    .auth-locked { display: inline-flex; grid-column: 3; justify-self: center; align-items: center; justify-content: center; width: 34px; height: 34px; color: #9a6b1b; background: #fdf6e8; border: 1px solid #ecd9a8; border-radius: 5px; }
+    .auth-locked svg { width: 14px; height: 14px; flex: none; }
+    tr[data-row].is-locked .field-input, tr[data-row].is-locked .auth-select, tr[data-row].is-locked .ms-trigger { color: #8aa09a; opacity: .62; cursor: not-allowed; }
+    tr[data-row].is-locked .ms-trigger:hover { background: transparent; border-color: transparent; }
+    :root[data-theme="dark"] tr[data-row].is-locked .field-input, :root[data-theme="dark"] tr[data-row].is-locked .auth-select, :root[data-theme="dark"] tr[data-row].is-locked .ms-trigger { color: #77908a; }
+    .auth-select { color: #30564d; font-size: 13px; font-weight: 600; }
+    .auth-value { min-width: 0; }
+    .auth-value .field-input { width: 100%; }
+    .multi-select { position: relative; min-width: 0; }
+    .ms-trigger { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 8px; color: #203330; background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+    .ms-trigger:hover { background: #fff; border-color: #b8c9c3; }
+    .ms-trigger:focus-visible { background: #fff; border-color: #b8c9c3; outline: 2px solid #62a58d; outline-offset: 1px; }
+    .ms-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+    .ms-chip { display: inline-flex; max-width: 100%; align-items: center; gap: 3px; padding: 2px 4px 2px 7px; color: #1c4a3d; background: #e5f1ec; border: 1px solid #bcd8cd; border-radius: 999px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .ms-chip.is-stale { color: #8a4a1d; background: #fdf0df; border-color: #e5c394; }
+    .ms-chip button { display: inline-grid; width: 15px; height: 15px; place-items: center; padding: 0; color: inherit; background: transparent; border: 0; border-radius: 50%; cursor: pointer; }
+    .ms-chip button:hover { background: rgba(0, 0, 0, .1); }
+    .ms-chip svg { width: 11px; height: 11px; }
+    .ms-placeholder { color: #97a7a2; font-size: 12px; white-space: nowrap; }
+    .ms-chevron { flex: 0 0 14px; width: 14px; height: 14px; color: #8b9a96; }
+    .ms-menu { position: fixed; z-index: 60; display: grid; gap: 2px; width: max-content; min-width: 240px; max-height: 260px; padding: 6px; overflow: auto; color: #203330; background: #fff; border: 1px solid #c8d4d0; border-radius: 6px; box-shadow: 0 14px 30px rgba(24, 44, 39, .16); }
+    .ms-menu[hidden] { display: none; }
+    .ms-option { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+    .ms-option:hover { background: #f0f6f3; }
+    .ms-option input { width: 15px; height: 15px; margin: 0; accent-color: #4d8f79; }
+    .ms-option.is-stale { color: #9a6b1b; }
+    .ms-empty { padding: 12px; color: #7b8b87; font-size: 12px; text-align: center; }
+    .selector-table-head { display: grid; grid-template-columns: 180px minmax(0, 1fr) 120px; gap: 12px; padding: 9px 20px 7px; color: #778984; background: #f7faf8; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+    .selector-list { display: grid; gap: 8px; padding: 10px; background: #f7faf8; }
+    .selector-row { display: grid; grid-template-columns: 180px minmax(0, 1fr) 120px; gap: 12px; align-items: start; padding: 12px; background: #fff; border: 1px solid #dce5e1; border-radius: 6px; }
+    .selector-row:hover { border-color: #bdcdc6; background: #fbfdfc; }
+    .selector-name-cell { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: auto auto; gap: 5px; align-items: center; }
+    .selector-name-cell .drag-handle { grid-row: 1 / 3; }
+    .selector-matches { display: grid; gap: 6px; min-width: 0; min-height: 48px; padding: 6px; background: #f7faf8; border: 1px solid #d5e0db; border-radius: 5px; }
+    .rule { display: grid; grid-template-columns: 58px minmax(0, 1fr) 40px 34px; gap: 6px; align-items: center; padding: 6px; background: #fff; border: 1px solid #d5e0db; border-radius: 5px; }
+    .rule.is-disabled { opacity: .45; }
+    .rule-kind { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: #3f8b73; white-space: nowrap; }
+    .rule[data-rule-type="path"] .rule-kind { color: #9a6b1b; }
+    .rule[data-rule-type="body"] .rule-kind { color: #5a6db8; }
+    .rule[data-rule-type="query"] .rule-kind { color: #7b5aa6; }
+    .rule[data-rule-type="rewrite"] .rule-kind { color: #a44a6e; }
+    .rule-controls { display: grid; gap: 6px; min-width: 0; align-items: center; }
+    .rule-controls-header, .rule-controls-query, .rule-controls-body { grid-template-columns: minmax(0, 1fr) 110px minmax(0, 1fr); }
+    .rule-controls-path { grid-template-columns: 110px minmax(0, 1fr); }
+    .rule-controls-rewrite { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    .rule-controls-method { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .method-chip { position: relative; display: inline-flex; cursor: pointer; }
+    .method-chip input { position: absolute; opacity: 0; pointer-events: none; }
+    .method-chip span { padding: 4px 9px; color: #60736d; background: #eef4f1; border: 1px solid #d5e0db; border-radius: 999px; font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; transition: background .15s ease, color .15s ease, border-color .15s ease; }
+    .method-chip input:checked + span { color: #173d34; background: #d9efc3; border-color: #a8cf77; }
+    .method-chip:hover span { border-color: #8fb7aa; }
+    .rule-switch { position: relative; display: inline-block; width: 38px; height: 22px; }
+    .rule-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+    .rule-switch span { position: absolute; inset: 0; background: #b9c7c2; border-radius: 999px; transition: background .15s ease; }
+    .rule-switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: transform .15s ease; }
+    .rule-switch input:checked + span { background: #4d8f79; }
+    .rule-switch input:checked + span::after { transform: translateX(16px); }
+    .rule-switch input:focus-visible + span { outline: 2px solid #62a58d; outline-offset: 1px; }
+    .rule-add { position: relative; display: flex; justify-content: flex-end; }
+    .rule-menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; display: grid; gap: 2px; padding: 4px; min-width: 120px; background: #fff; border: 1px solid #d5e0db; border-radius: 6px; box-shadow: 0 10px 24px rgba(20, 60, 48, .16); }
+    .rule-menu[hidden] { display: none; }
+    .rule-menu button { display: block; width: 100%; padding: 7px 10px; color: #203330; background: transparent; border: 0; border-radius: 4px; cursor: pointer; text-align: left; font-size: 12px; font-weight: 700; }
+    .rule-menu button:hover { background: #edf5f1; color: #27634f; }
+    .match-value-field { position: relative; min-width: 0; }
+    .match-value-field .field-input { padding-right: 66px; }
+    .match-value-actions { position: absolute; top: 3px; right: 3px; display: flex; align-items: center; }
+    .match-value-actions .icon-button { width: 28px; height: 28px; border: 0; background: transparent; }
+    .match-value-actions .rule-clear { color: #9e3e3e; }
+    .match-value-actions .rule-clear:hover { color: #862f2f; background: #fff1f0; }
+    .match-case-toggle.is-active { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    .selector-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .text-button { display: inline-flex; height: 34px; align-items: center; gap: 5px; padding: 0 4px; color: #327662; background: transparent; border: 0; cursor: pointer; font-size: 11px; font-weight: 700; }
+    .text-button svg { width: 14px; height: 14px; }
+    .selector-no-rules { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 10px; padding: 0 2px 0 6px; color: #7b8b87; font-size: 12px; }
+    .selector-no-rules[hidden] { display: none; }
+    .selector-empty { grid-column: 1 / -1; padding: 22px; color: #7b8b87; background: #fff; border: 1px dashed #c9d6d1; border-radius: 6px; font-size: 12px; text-align: center; }
+    .drop-indicator td { height: 42px; padding: 0; background: transparent; border: 0; }
+    .drop-indicator span { display: grid; height: 30px; place-items: center; color: #3f8b73; background: rgba(92, 165, 137, .08); border: 1px dashed #70a996; border-radius: 5px; font-size: 11px; font-weight: 700; }
+    .selector-list > .drop-indicator { display: grid; height: 38px; place-items: center; color: #3f8b73; background: rgba(92, 165, 137, .08); border: 1px dashed #70a996; border-radius: 5px; font-size: 11px; font-weight: 700; }
+    .drag-ghost { position: fixed; top: -200px; left: -200px; z-index: 10; padding: 8px 12px; color: #e9f3ef; background: #1c332d; border: 1px solid #6aa18e; border-radius: 5px; box-shadow: 0 10px 22px rgba(0, 0, 0, .22); font-size: 12px; font-weight: 700; pointer-events: none; }
+    .reorder-settled { animation: reorder-settle .54s ease; }
+    tr.reorder-settled td { animation: reorder-settle-cell .54s ease; }
+    @keyframes reorder-settle { 0% { border-color: #8fcf6e; box-shadow: 0 0 0 0 rgba(143, 207, 110, .38); } 100% { border-color: inherit; box-shadow: 0 0 0 10px rgba(143, 207, 110, 0); } }
+    @keyframes reorder-settle-cell { 0% { background: #233b31; border-color: #8fcf6e; } 100% { background: inherit; border-color: inherit; } }
+    .logs { margin-top: 20px; overflow: hidden; background: #13211f; border: 1px solid #29433e; border-radius: 8px; }
+    .logs-top { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; color: #dce9e5; border-bottom: 1px solid #29433e; }
+    .logs-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 700; }
+    .live-dot { width: 7px; height: 7px; background: #b9e55a; border-radius: 50%; box-shadow: 0 0 0 3px rgba(185, 229, 90, .12); }
+    .logs-meta { color: #9db5ae; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    #log-stream { height: min(75vh, 720px); min-height: 420px; overflow: auto; padding: 14px; margin: 0; color: #c6d8d2; background: #13211f; white-space: pre-wrap; word-break: break-word; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    #log-stream::selection { color: #13211f; background: #cbe86b; }
+    .log-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: #f7faf8; border-bottom: 1px solid #e5ece9; }
+    .log-toolbar .text-button.is-active { color: #3f8b73; }
+    .telemetry { margin-top: 20px; overflow: hidden; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .04); }
+    .telemetry-panel[hidden] { display: none; }
+    .tab-connection { color: #7c918a; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .tab-count { min-width: 20px; height: 18px; padding: 0 6px; display: inline-grid; place-items: center; color: #2e5b51; background: rgba(46, 91, 81, .10); border-radius: 9px; font: 700 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .session-journal { margin-top: 20px; overflow: hidden; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .04); }
+    .journal-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #e5ece9; }
+    .journal-title { margin: 0; color: #213633; font-size: 15px; font-weight: 700; }
+    .journal-note { margin: 3px 0 0; color: #71827e; font-size: 12px; }
+    .session-table-head { display: grid; grid-template-columns: 8px minmax(110px, 1.4fr) minmax(52px, .7fr) minmax(64px, .8fr) minmax(52px, .8fr) 52px 40px minmax(44px, .6fr) minmax(44px, .6fr) minmax(44px, .6fr) 18px; align-items: center; gap: 12px; padding: 8px 24px; color: #778984; background: #eef4f1; border-bottom: 1px solid #d7e0dc; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .session-table-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-list { display: grid; gap: 8px; padding: 10px; background: #f7faf8; }
+    .session-card { overflow: hidden; background: #fff; border: 1px solid #dce5e1; border-radius: 6px; }
+    .session-summary { display: grid; width: 100%; grid-template-columns: 8px minmax(110px, 1.4fr) minmax(52px, .7fr) minmax(64px, .8fr) minmax(52px, .8fr) 52px 40px minmax(44px, .6fr) minmax(44px, .6fr) minmax(44px, .6fr) 18px; align-items: center; gap: 12px; padding: 12px 14px; color: #233834; background: #fff; border: 0; cursor: pointer; text-align: left; }
+    .session-summary:hover { background: #fbfdfc; }
+    .session-summary:focus-visible { outline: 2px solid #62a58d; outline-offset: -2px; }
+    .session-indicator { width: 8px; height: 8px; border-radius: 50%; }
+    .session-primary { display: grid; gap: 3px; min-width: 0; }
+    .session-path { overflow: hidden; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-path b { color: #18755f; font-weight: 800; }
+    .session-id { color: #7b8b87; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .session-cell { min-width: 0; overflow: hidden; color: #4a615b; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-selector, .session-upstream { color: #327662; }
+    .session-empty-cell { color: #a9b7b2; }
+    .session-model { justify-self: start; max-width: 100%; overflow: hidden; padding: 1px 7px; color: #1c4a3d; background: #e5f1ec; border: 1px solid #bcd8cd; border-radius: 999px; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-state { justify-self: start; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .session-metric { display: grid; gap: 2px; text-align: right; }
+    .session-metric small, .session-overview small { color: #82928e; font-size: 10px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+    .session-metric strong, .session-overview strong { color: #314743; font: 12px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .session-chevron { width: 16px; height: 16px; color: #8b9a96; transition: transform .16s ease; }
+    .session-card.expanded .session-chevron { transform: rotate(180deg); }
+    .session-details { padding: 0 14px 14px; border-top: 1px solid #e8eeeb; background: #fbfdfc; }
+    .session-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; padding: 12px 0; border-bottom: 1px solid #e7eeea; }
+    .session-overview span { display: grid; gap: 3px; }
+    .payload-open-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+    .payload-open { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 10px 12px; color: #dceae5; background: #162a24; border: 1px solid #29423c; border-radius: 6px; cursor: pointer; text-align: left; font: inherit; }
+    .payload-open:hover { background: #1d342d; border-color: #3c6658; }
+    .payload-open svg { flex: 0 0 15px; width: 15px; height: 15px; color: #8bc7a9; }
+    .payload-open span { overflow: hidden; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-open small { margin-left: auto; overflow: hidden; color: #8eaaa1; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; padding: 24px; }
+    .payload-modal[hidden] { display: none; }
+    .payload-modal-backdrop { position: absolute; inset: 0; background: rgba(8, 20, 17, .6); }
+    .payload-modal-box { position: relative; display: flex; flex-direction: column; width: min(1100px, 100%); height: min(720px, 90%); overflow: hidden; background: #0f1b18; border: 1px solid #29423c; border-radius: 8px; box-shadow: 0 24px 64px rgba(0, 0, 0, .45); }
+    .payload-modal-head { display: flex; align-items: center; gap: 12px; padding: 10px 12px; color: #b8ccc5; background: #162a24; border-bottom: 1px solid #29423c; }
+    .payload-modal-head h3 { margin: 0; color: #dceae5; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .02em; }
+    .payload-modal-meta { overflow: hidden; color: #8eaaa1; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-modal-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+    .payload-modal-actions .icon-button { width: 28px; height: 28px; color: #8eaaa1; }
+    .payload-modal-actions .icon-button:hover { color: #dceae5; background: rgba(255, 255, 255, .08); }
+    .payload-modal-actions .icon-button.is-active { color: #cbe86b; }
+    .payload-modal-body { flex: 1; min-height: 0; margin: 0; padding: 14px; overflow: auto; color: #cae0d8; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .config-modal-body { flex: 1; min-height: 0; margin: 0; padding: 12px; color: #cae0d8; background: #0f1b18; border: 0; border-radius: 0; outline: none; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre; overflow: auto; resize: none; }
+    .config-modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: #162a24; border-top: 1px solid #29423c; }
+    .config-modal-status { overflow: hidden; color: #8eaaa1; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .config-modal-status.is-error { color: #efa6a2; }
+    .config-modal-status.is-success { color: #cbe86b; }
+    .config-modal-toggle { display: inline-flex; align-items: center; gap: 6px; color: #8eaaa1; font-size: 11px; white-space: nowrap; cursor: pointer; }
+    .config-modal-toggle input { width: 14px; height: 14px; margin: 0; accent-color: #4d8f79; }
+    body.has-modal { overflow: hidden; }
+    .session-headers { padding-top: 12px; }
+    .session-events { padding-top: 12px; }
+    .session-headers h3, .session-events h3 { margin: 0 0 8px; color: #647773; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+    .header-list { max-height: 190px; padding: 0; margin: 0; overflow: auto; }
+    .header-list div { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 10px; padding: 5px 0; border-bottom: 1px solid #edf2ef; }
+    .header-list dt { color: #6d807a; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .header-list dd { margin: 0; overflow-wrap: anywhere; color: #314641; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .request-list { padding: 0; margin: 0; list-style: none; }
+    .request-list li { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #edf2ef; color: #30443f; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .request-list li span:last-child { color: #748681; white-space: nowrap; }
+    .gateway-events { display: grid; gap: 0; max-height: 190px; padding: 0; margin: 0; overflow: auto; list-style: none; }
+    .gateway-events li { display: grid; grid-template-columns: 58px 82px minmax(0, 1fr); gap: 8px; padding: 6px 0; border-bottom: 1px solid #edf2ef; color: #334b45; font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .gateway-events time { color: #82938e; }
+    .gateway-event-kind { color: #28765f; font-weight: 700; }
+    .gateway-events-empty { display: block !important; color: #778984 !important; }
+    .is-connecting { color: #9a6b1b; background: #fff5d8; }
+    .session-indicator.is-connecting { background: #e6aa42; }
+    .is-streaming { color: #21745f; background: #e3f5e9; }
+    .session-indicator.is-streaming { background: #53a97f; box-shadow: 0 0 0 3px rgba(83, 169, 127, .12); }
+    .is-completed { color: #506560; background: #edf2f0; }
+    .session-indicator.is-completed { background: #9aa9a5; }
+    .is-warning { color: #98691c; background: #fff4d8; }
+    .session-indicator.is-warning { background: #e1a843; }
+    .is-error { color: #a33e3e; background: #fff0ef; }
+    .session-indicator.is-error { background: #d66a66; }
+    .session-empty { padding: 28px; color: #7b8b87; font-size: 13px; text-align: center; }
+    :root[data-theme="dark"] body { color: #dbe7e2; background: #0d1513; }
+    :root[data-theme="dark"] .telemetry-top { background: #0e1916; border-color: #2b403a; color: #dbe7e2; }
+    :root[data-theme="dark"] .telemetry-top .telemetry-tab { color: #8ea69e; }
+    :root[data-theme="dark"] .telemetry-top .telemetry-tab:hover { color: #d2e3dc; background: #172923; }
+    :root[data-theme="dark"] .telemetry-top .telemetry-tab[aria-selected="true"] { color: #e7f0ec; background: #14201d; border-color: #2b403a; box-shadow: none; }
+    :root[data-theme="dark"] .telemetry-top .tab-count { color: #b9e55a; background: rgba(185, 229, 90, .12); }
+    :root[data-theme="dark"] .telemetry-top .tab-connection { color: #78958a; }
+    :root[data-theme="dark"] .telemetry-top .debug-toggle { color: #b4c8c1; }
+    :root[data-theme="dark"] .telemetry-top.hamburger-mode .telemetry-tabbar { background: #14201d; border-color: #2b403a; }
+    :root[data-theme="dark"] .telemetry-top.hamburger-mode .tab-menu-button { color: #b4c8c1; }
+    :root[data-theme="dark"] .telemetry { background: #14201d; border-color: #2b403a; box-shadow: 0 14px 30px rgba(0, 0, 0, .2); }
+    :root[data-theme="dark"] .add-row { color: #8fa59e; border-color: #405750; }
+    :root[data-theme="dark"] .add-row:hover { color: #d4e8df; background: #1a2a26; border-color: #638d7f; }
+    :root[data-theme="dark"] .icon-button { color: #b4c8c1; background: #1b2b27; border-color: #395047; }
+    :root[data-theme="dark"] .icon-button:hover { color: #d4e8df; background: #253a34; border-color: #638d7f; }
+    :root[data-theme="dark"] .icon-button.save { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    :root[data-theme="dark"] .icon-button.danger { color: #efa6a2; }
+    :root[data-theme="dark"] .icon-button.danger:hover { color: #ffd0cc; background: #432728; border-color: #8b5551; }
+    :root[data-theme="dark"] #status { color: #a9bbb5; }
+    :root[data-theme="dark"] .table-scroll, :root[data-theme="dark"] .selector-list { background: #101a17; }
+    :root[data-theme="dark"] th { color: #94aaa2; background: transparent; }
+    :root[data-theme="dark"] th, :root[data-theme="dark"] td, :root[data-theme="dark"] .header-list div, :root[data-theme="dark"] .request-list li { border-color: #293d38; }
+    :root[data-theme="dark"] tr[data-row] td { background: #172622; border-color: #30463f; }
+    :root[data-theme="dark"] tr[data-row]:hover td, :root[data-theme="dark"] .session-summary:hover { background: #1a2a26; }
+    :root[data-theme="dark"] .field-input, :root[data-theme="dark"] .auth-select { color: #dce9e4; }
+    :root[data-theme="dark"] .field-input:hover, :root[data-theme="dark"] .auth-select:hover, :root[data-theme="dark"] .field-input:focus, :root[data-theme="dark"] .auth-select:focus { background: #1d302b; border-color: #527b6d; }
+    :root[data-theme="dark"] .auth-select { color: #bbddd0; }
+    :root[data-theme="dark"] .ms-trigger { color: #dce9e4; }
+    :root[data-theme="dark"] .ms-trigger:hover, :root[data-theme="dark"] .ms-trigger:focus-visible { background: #1d302b; border-color: #527b6d; }
+    :root[data-theme="dark"] .ms-chip { color: #bfe3d2; background: #1d3a31; border-color: #3c6658; }
+    :root[data-theme="dark"] .ms-chip.is-stale { color: #f0c466; background: #453719; border-color: #7a5b20; }
+    :root[data-theme="dark"] .ms-placeholder { color: #78958a; }
+    :root[data-theme="dark"] .ms-chevron { color: #78958a; }
+    :root[data-theme="dark"] .ms-menu { color: #dce9e4; background: #172622; border-color: #395047; box-shadow: 0 16px 32px rgba(0, 0, 0, .45); }
+    :root[data-theme="dark"] .ms-option:hover { background: #1d302b; }
+    :root[data-theme="dark"] .ms-empty { color: #8ba198; }
+    :root[data-theme="dark"] .drag-handle { color: #78928a; }
+    :root[data-theme="dark"] .tab-connection { color: #78958a; }
+    :root[data-theme="dark"] .tab-count { color: #b9e55a; background: rgba(185, 229, 90, .12); }
+    :root[data-theme="dark"] .selector-table-head { color: #94aaa2; background: #101a17; }
+    :root[data-theme="dark"] .selector-row { background: #172622; border-color: #30463f; }
+    :root[data-theme="dark"] .selector-row:hover { background: #1a2a26; }
+    :root[data-theme="dark"] .selector-empty { color: #8ba198; background: #172622; border-color: #405750; }
+    :root[data-theme="dark"] .selector-matches { background: #101a17; border-color: #30463f; }
+    :root[data-theme="dark"] .rule { background: #172622; border-color: #30463f; }
+    :root[data-theme="dark"] .method-chip span { color: #8ea69e; background: #101a17; border-color: #30463f; }
+    :root[data-theme="dark"] .method-chip input:checked + span { color: #173d34; background: #cbe86b; border-color: #cbe86b; }
+    :root[data-theme="dark"] .rule-switch span { background: #42574f; }
+    :root[data-theme="dark"] .rule-switch span::after { background: #dfeae5; }
+    :root[data-theme="dark"] .rule-switch input:checked + span { background: #4d8f79; }
+    :root[data-theme="dark"] .rule-menu { background: #1a2a26; border-color: #30463f; box-shadow: 0 10px 24px rgba(0, 0, 0, .4); }
+    :root[data-theme="dark"] .rule-menu button { color: #dce9e4; }
+    :root[data-theme="dark"] .rule-menu button:hover { background: #243b34; color: #bbddd0; }
+    :root[data-theme="dark"] .selector-no-rules { color: #8ba198; }
+    :root[data-theme="dark"] .match-value-actions .rule-clear { color: #efa6a2; }
+    :root[data-theme="dark"] .match-value-actions .rule-clear:hover { color: #ffd0cc; background: #432728; }
+    :root[data-theme="dark"] .text-button { color: #8bc7a9; }
+    :root[data-theme="dark"] .match-case-toggle.is-active { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
+    :root[data-theme="dark"] .session-list { background: #101a17; }
+    :root[data-theme="dark"] .session-card, :root[data-theme="dark"] .session-summary { background: #172622; border-color: #30463f; color: #dce9e4; }
+    :root[data-theme="dark"] .session-details { background: #13201c; border-color: #2a3f38; }
+    :root[data-theme="dark"] .session-model { color: #bfe3d2; background: #1d3a31; border-color: #3c6658; }
+    :root[data-theme="dark"] .session-path b { color: #79c9a7; }
+    :root[data-theme="dark"] .session-id, :root[data-theme="dark"] .session-metric small, :root[data-theme="dark"] .session-overview small { color: #879e96; }
+    :root[data-theme="dark"] .session-table-head { color: #94aaa2; background: #0e1916; border-color: #2b403a; }
+    :root[data-theme="dark"] .session-selector, :root[data-theme="dark"] .session-upstream { color: #8bc7a9; }
+    :root[data-theme="dark"] .session-cell { color: #a9bdb6; }
+    :root[data-theme="dark"] .session-empty-cell { color: #5c716a; }
+    :root[data-theme="dark"] .session-metric strong, :root[data-theme="dark"] .session-overview strong, :root[data-theme="dark"] .header-list dd, :root[data-theme="dark"] .request-list { color: #d1dfd9; }
+    :root[data-theme="dark"] .log-toolbar { background: #101a17; border-color: #2b403a; }
+    :root[data-theme="dark"] .session-headers h3, :root[data-theme="dark"] .session-events h3, :root[data-theme="dark"] .header-list dt, :root[data-theme="dark"] .gateway-events time { color: #93aaa1; }
+    :root[data-theme="dark"] .gateway-events li { color: #c9d8d1; border-color: #293d38; }
+    :root[data-theme="dark"] .gateway-event-kind { color: #7fcaab; }
+    :root[data-theme="dark"] .is-completed { color: #b5c6c0; background: #263734; }
+    :root[data-theme="dark"] .is-warning { color: #f0c466; background: #453719; }
+    :root[data-theme="dark"] .is-error { color: #f3aaa6; background: #48292a; }
+    :root[data-theme="dark"] .session-empty { color: #8ba198; }
+    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .telemetry { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-table-head { display: none; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 60px 60px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-send, .session-metric.session-receive { display: grid; } .session-selector, .session-upstream, .session-model { display: none; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
+    @media (max-width: 760px) { .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr); } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="telemetry" aria-labelledby="workspace-title">
+      <h2 class="sr-only" id="workspace-title">Workspace</h2>
+      <div class="telemetry-top">
+        <button class="tab-menu-button" type="button" data-tab-menu-button aria-label="切换视图" aria-expanded="false" aria-haspopup="menu"><i data-lucide="menu"></i></button>
+        <div class="identity">
+          <div class="brand-mark" title="AGW">AGW</div>
+        </div>
+        <div class="telemetry-tabbar" role="tablist" aria-label="工作区视图"><button class="telemetry-tab" type="button" role="tab" id="selectors-tab" aria-selected="true" aria-controls="selectors-panel" data-telemetry-tab="selectors"><span class="live-dot"></span><span>AppSelector</span><span class="tab-count" data-selector-tab-count>0</span></button><button class="telemetry-tab" type="button" role="tab" id="routing-tab" aria-selected="false" aria-controls="routing-panel" data-telemetry-tab="routing"><span class="live-dot"></span><span>Routing</span><span class="tab-count" data-upstream-tab-count>0</span></button><button class="telemetry-tab" type="button" role="tab" id="sessions-tab" aria-selected="false" aria-controls="sessions-panel" data-telemetry-tab="sessions"><span class="live-dot"></span><span>Sessions</span><span class="tab-count" data-session-count>0</span></button><button class="telemetry-tab" type="button" role="tab" id="logs-tab" aria-selected="false" aria-controls="logs-panel" data-telemetry-tab="logs"><span class="live-dot"></span><span>Logs</span><span class="tab-count" data-log-count>0</span></button></div>
+        <div class="appbar-actions">
+        {{if .AllowDebug}}<label class="debug-toggle" title="记录客户端请求头；日志可能包含认证信息">
+          <input id="debug-toggle" type="checkbox"{{if .Debug}} checked{{end}}>
+          <span class="switch"></span><span>Debug headers</span>
+        </label>{{end}}
+        <span id="status" aria-live="polite"></span>
+        <button class="icon-button" type="button" id="theme-toggle" title="切换到浅色主题" aria-label="切换到浅色主题"><i data-lucide="sun"></i></button>
+        <button class="icon-button" type="button" title="刷新配置" aria-label="刷新配置" hx-get="/config" hx-target="#config-table" hx-swap="innerHTML"><i data-lucide="refresh-cw"></i></button>
+        <button class="icon-button" type="button" id="yaml-config" title="查看 / 导入 YAML" aria-label="查看 / 导入 YAML"><i data-lucide="file-code"></i></button>
+        <button class="icon-button" type="button" id="secrets-config" title="密钥管理（浏览器本地）" aria-label="密钥管理"><i data-lucide="key"></i></button>
+        <button class="icon-button save" type="button" id="save" title="保存配置" aria-label="保存配置"><i data-lucide="save"></i></button>
+        </div>
+      </div>
+      <div class="telemetry-panel" id="routing-panel" role="tabpanel" aria-labelledby="routing-tab" hidden>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th class="priority" scope="col">优先级</th><th class="name" scope="col">Name</th><th class="endpoint" scope="col">Upstream endpoint</th><th class="authentication" scope="col">Authentication</th><th class="app-selectors" scope="col">Compatible AppSelectors</th><th class="row-actions" scope="col">Actions</th></tr></thead>
+          <tbody id="config-table" data-drop-zone hx-get="/config" hx-trigger="load" hx-swap="innerHTML"><tr><td colspan="6">正在加载上游配置...</td></tr></tbody>
+          <tfoot><tr><td colspan="6" class="add-row-cell"><button class="add-row" type="button" id="add-upstream" title="新增上游" aria-label="新增上游"><i data-lucide="plus"></i>添加 upstream</button></td></tr></tfoot>
+        </table>
+      </div>
+      </div>
+      <div class="telemetry-panel" id="selectors-panel" role="tabpanel" aria-labelledby="selectors-tab">
+      <div class="selector-table-head" role="row"><span>AppSelector</span><span>Rules</span><span>Actions</span></div>
+      <div id="selector-list" class="selector-list" data-drop-zone>
+        {{range .AppSelectors}}<div class="selector-row" data-selector data-draggable draggable="true"><div class="selector-name-cell"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span><input class="field-input" data-selector-name value="{{.Name}}" placeholder="selector name" aria-label="AppSelector 名称"></div><div class="selector-matches selector-rules" data-selector-rules>{{if .Methods}}<div class="rule" data-rule data-rule-type="method" data-enabled="true"><span class="rule-kind">method</span><div class="rule-controls rule-controls-method"><label class="method-chip"><input type="checkbox" data-method="GET"{{if has .Methods "GET"}} checked{{end}}><span>GET</span></label><label class="method-chip"><input type="checkbox" data-method="POST"{{if has .Methods "POST"}} checked{{end}}><span>POST</span></label><label class="method-chip"><input type="checkbox" data-method="PUT"{{if has .Methods "PUT"}} checked{{end}}><span>PUT</span></label><label class="method-chip"><input type="checkbox" data-method="PATCH"{{if has .Methods "PATCH"}} checked{{end}}><span>PATCH</span></label><label class="method-chip"><input type="checkbox" data-method="DELETE"{{if has .Methods "DELETE"}} checked{{end}}><span>DELETE</span></label><label class="method-chip"><input type="checkbox" data-method="HEAD"{{if has .Methods "HEAD"}} checked{{end}}><span>HEAD</span></label><label class="method-chip"><input type="checkbox" data-method="OPTIONS"{{if has .Methods "OPTIONS"}} checked{{end}}><span>OPTIONS</span></label></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled checked aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Path}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="path" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">path</span><div class="rule-controls rule-controls-path"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="/v1/chat/completions" aria-label="匹配路径"{{if eq .Operator "present"}} disabled{{end}}></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Headers}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="header" data-case-sensitive="{{.CaseSensitive}}" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">header</span><div class="rule-controls rule-controls-header"><input class="field-input" data-rule-name value="{{.Name}}" placeholder="User-Agent" aria-label="匹配 header"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button></span></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Body}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="body" data-case-sensitive="{{.CaseSensitive}}" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">body</span><div class="rule-controls rule-controls-body"><input class="field-input" data-rule-name value="{{.Field}}" placeholder="model" aria-label="JSON 字段"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button></span></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Query}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="query" data-case-sensitive="{{.CaseSensitive}}" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">query</span><div class="rule-controls rule-controls-query"><input class="field-input" data-rule-name value="{{.Name}}" placeholder="api-version" aria-label="匹配 query 参数"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button></span></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Rewrite}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="rewrite" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">rewrite</span><div class="rule-controls rule-controls-rewrite"><input class="field-input" data-rule-name value="{{.Field}}" placeholder="model" aria-label="要重写的字段"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="gpt-5.6-luna" aria-label="重写后的值"></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}<div class="selector-no-rules" data-rule-empty{{if .HasRules}} hidden{{end}}>No rules - matches all requests</div><div class="rule-add"><button class="text-button" type="button" data-add-rule title="添加规则" aria-label="添加规则"><i data-lucide="plus"></i>添加规则</button><div class="rule-menu" data-rule-menu hidden role="menu" aria-label="规则类型"><button type="button" data-rule-type-option="path">Path</button><button type="button" data-rule-type-option="header">Header</button><button type="button" data-rule-type-option="body">Body</button><button type="button" data-rule-type-option="query">Query</button><button type="button" data-rule-type-option="method">Method</button><button type="button" data-rule-type-option="rewrite">Rewrite</button></div></div></div><div class="selector-actions"><button class="icon-button danger" type="button" data-delete-selector title="删除 AppSelector" aria-label="删除 AppSelector"><i data-lucide="trash-2"></i></button></div></div>{{else}}<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>{{end}}
+        <button class="add-row" type="button" id="add-selector" title="新增 AppSelector" aria-label="新增 AppSelector"><i data-lucide="plus"></i>添加 AppSelector</button>
+      </div>
+      </div>
+      <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab" hidden><div class="session-table-head" role="row"><span></span><span>Session</span><span>Selector</span><span>Upstream</span><span>Model</span><span>State</span><span>Status</span><span>Send</span><span>Receive</span><span>Duration</span><span></span></div><div id="session-list" class="session-list"></div></div>
+      <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><div class="log-toolbar"><span class="tab-connection" data-log-connection>SSE connected</span><button class="text-button" type="button" data-log-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i>pretty</button></div><pre id="log-stream"></pre></div>
+    </section>
+  </main>
+  <div class="payload-modal" data-payload-modal hidden role="dialog" aria-modal="true" aria-labelledby="payload-modal-title">
+    <div class="payload-modal-backdrop" data-payload-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="payload-modal-title" data-payload-modal-title>Intercepted response</h3>
+        <span class="payload-modal-meta" data-payload-modal-meta></span>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-payload-modal-full title="打开完整原文" aria-label="打开完整原文"><i data-lucide="file-text"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <pre class="payload-modal-body" data-payload-modal-body></pre>
+    </div>
+  </div>
+  <div class="payload-modal" data-config-modal hidden role="dialog" aria-modal="true" aria-labelledby="config-modal-title">
+    <div class="payload-modal-backdrop" data-config-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="config-modal-title">配置文件 (YAML)</h3>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-config-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <textarea class="config-modal-body" data-config-yaml spellcheck="false" wrap="off"></textarea>
+      <div class="config-modal-foot">
+        <span class="config-modal-status" data-config-yaml-status></span>
+        <label class="config-modal-toggle" title="合并后包含真实凭据，便于导出备份；取消则显示磁盘形态（仅 secret 引用）"><input type="checkbox" data-config-yaml-merged>合并显示</label>
+        <button class="text-button" type="button" data-config-yaml-import><i data-lucide="upload"></i>导入并保存</button>
+      </div>
+    </div>
+  </div>
+  <div class="payload-modal" data-secrets-modal hidden role="dialog" aria-modal="true" aria-labelledby="secrets-modal-title">
+    <div class="payload-modal-backdrop" data-secrets-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="secrets-modal-title">密钥 (浏览器本地)</h3>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-secrets-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <textarea class="config-modal-body" data-secrets-yaml spellcheck="false" wrap="off" placeholder='{"key": "value"}'></textarea>
+      <div class="config-modal-foot">
+        <span class="config-modal-status" data-secrets-status></span>
+        <button class="text-button" type="button" data-secrets-save><i data-lucide="key"></i>保存到浏览器并解锁</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const table = document.getElementById('config-table');
+    const selectorList = document.getElementById('selector-list');
+    const status = document.getElementById('status');
+    const saveButton = document.getElementById('save');
+    const themeToggle = document.getElementById('theme-toggle');
+    const sessionList = document.getElementById('session-list');
+    const expandedSessions = new Set();
+    let dragged, dragContainer, dropIndicator, dragGhost;
+    function renderIcons(scope) { if (window.lucide) window.lucide.createIcons({root: scope || document, attrs: {'stroke-width': 1.8}}); }
+    function setTheme(theme) { document.documentElement.dataset.theme = theme; try { localStorage.setItem('agw-theme', theme); } catch (_) {} const isDark = theme === 'dark'; themeToggle.title = isDark ? '切换到浅色主题' : '切换到深色主题'; themeToggle.setAttribute('aria-label', themeToggle.title); themeToggle.innerHTML = '<i data-lucide="' + (isDark ? 'sun' : 'moon') + '"></i>'; renderIcons(themeToggle); }
+    function applyTelemetryView(view, focus) { document.querySelectorAll('[data-telemetry-tab]').forEach(tab => { const active = tab.dataset.telemetryTab === view; tab.setAttribute('aria-selected', String(active)); document.getElementById(tab.getAttribute('aria-controls')).hidden = !active; if (active && focus) tab.focus(); }); closeTabMenu(); }
+    function viewFromHash() { const name = location.hash.replace(/^#/, ''); return [...document.querySelectorAll('[data-telemetry-tab]')].some(tab => tab.dataset.telemetryTab === name) ? name : ''; }
+    function setTelemetryView(view, focus) { applyTelemetryView(view, focus); if (location.hash !== '#' + view) location.hash = view; }
+    window.addEventListener('hashchange', function () { const view = viewFromHash(); if (view) applyTelemetryView(view); });
+    const tabMenuButton = document.querySelector('[data-tab-menu-button]');
+    const workspaceTabbar = document.querySelector('.telemetry-top .telemetry-tabbar');
+    const workspaceTop = document.querySelector('.telemetry-top');
+    const workspaceIdentity = document.querySelector('.telemetry-top .identity');
+    const workspaceActions = document.querySelector('.telemetry-top .appbar-actions');
+    function closeTabMenu() { if (tabMenuButton && workspaceTabbar) { workspaceTabbar.classList.remove('open'); tabMenuButton.setAttribute('aria-expanded', 'false'); } }
+    if (tabMenuButton) {
+      tabMenuButton.addEventListener('click', function (event) { event.stopPropagation(); const open = tabMenuButton.getAttribute('aria-expanded') !== 'true'; workspaceTabbar.classList.toggle('open', open); tabMenuButton.setAttribute('aria-expanded', String(open)); });
+    }
+    document.addEventListener('click', function (event) { if (tabMenuButton && !event.target.closest('.telemetry-top')) closeTabMenu(); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape') closeTabMenu(); });
+    // Switch to the hamburger menu whenever the inline tabs actually wrap or
+    // overflow, not at a fixed breakpoint.
+    let tabLayoutTimer = null;
+    function updateTabLayoutMode() {
+      if (!workspaceTop || !workspaceTabbar || !workspaceIdentity || !workspaceActions) return;
+      // Measure in the inline layout; the dropdown is display:none and would
+      // otherwise report zero dimensions while hamburger-mode is active.
+      workspaceTop.classList.remove('hamburger-mode');
+      const identityBottom = workspaceIdentity.getBoundingClientRect().bottom + 2;
+      const wrapped = workspaceTabbar.getBoundingClientRect().top > identityBottom || workspaceActions.getBoundingClientRect().top > identityBottom;
+      const overflows = workspaceTabbar.scrollWidth > workspaceTabbar.clientWidth + 2;
+      const hamburger = wrapped || overflows;
+      workspaceTop.classList.toggle('hamburger-mode', hamburger);
+      if (!hamburger) closeTabMenu();
+    }
+    window.addEventListener('resize', function () {
+      if (tabLayoutTimer) return;
+      tabLayoutTimer = setTimeout(function () { tabLayoutTimer = null; updateTabLayoutMode(); }, 100);
+    });
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+      return new Promise(function (resolve, reject) {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.append(area);
+        area.select();
+        try { document.execCommand('copy') ? resolve() : reject(new Error('copy failed')); } catch (error) { reject(error); } finally { area.remove(); }
+      });
+    }
+    function formatByteCount(n) {
+      if (n < 1024) return n + ' B';
+      const k = n / 1024;
+      if (k < 1024) return k.toFixed(1) + ' KB';
+      return (k / 1024).toFixed(1) + ' MB';
+    }
+    function setModalBody(body) {
+      const raw = body.dataset.raw || '';
+      const pretty = document.querySelector('[data-payload-modal-pretty]');
+      const scrollTop = body.scrollTop;
+      if (pretty && pretty.classList.contains('is-active')) {
+        try { body.textContent = JSON.stringify(JSON.parse(raw), null, 2); body.scrollTop = scrollTop; return; } catch (_) {}
+      }
+      body.textContent = raw;
+      body.scrollTop = scrollTop;
+    }
+    function openPayloadModal(sessionID, kind) {
+      const modal = document.querySelector('[data-payload-modal]');
+      const body = modal.querySelector('[data-payload-modal-body]');
+      const title = modal.querySelector('[data-payload-modal-title]');
+      const meta = modal.querySelector('[data-payload-modal-meta]');
+      const pretty = modal.querySelector('[data-payload-modal-pretty]');
+      pretty.classList.remove('is-active');
+      pretty.setAttribute('aria-pressed', 'false');
+      title.textContent = kind === 'request' ? 'Intercepted request' : 'Intercepted response';
+      meta.textContent = '加载中…';
+      body.textContent = '';
+      body.dataset.raw = '';
+      modal.dataset.sessionId = sessionID;
+      modal.dataset.kind = kind;
+      modal.hidden = false;
+      document.body.classList.add('has-modal');
+      fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind)
+        .then(response => { if (!response.ok) throw new Error('加载失败 (' + response.status + ')'); return response.text(); })
+        .then(text => { body.dataset.raw = text; setModalBody(body); meta.textContent = formatByteCount(new Blob([text]).size) + ' · ' + text.length.toLocaleString() + ' chars'; })
+        .catch(error => { body.textContent = String(error); meta.textContent = '加载失败'; });
+    }
+    function closePayloadModal() {
+      const modal = document.querySelector('[data-payload-modal]');
+      modal.hidden = true;
+      document.body.classList.remove('has-modal');
+    }
+    const configModal = document.querySelector('[data-config-modal]');
+    const configYamlInput = document.querySelector('[data-config-yaml]');
+    const configYamlStatus = document.querySelector('[data-config-yaml-status]');
+    const configYamlImport = document.querySelector('[data-config-yaml-import]');
+    const configYamlMerged = document.querySelector('[data-config-yaml-merged]');
+    function decodeSecretValue(stored) {
+      if (stored.startsWith('b64:')) {
+        try { return atob(stored.slice(4)); } catch (_) {}
+      }
+      return stored;
+    }
+    function mergeConfigYaml(yamlText) {
+      const stored = localStorage.getItem(secretsStorageKey);
+      if (!stored) return yamlText;
+      let secrets = {};
+      try { secrets = JSON.parse(stored); } catch (_) { return yamlText; }
+      return yamlText.replace(/(value:\s*)secret:([A-Za-z0-9_-]+)/g, (match, prefix, key) => {
+        const raw = secrets[key];
+        if (raw === undefined) return match;
+        return prefix + JSON.stringify(decodeSecretValue(raw));
+      });
+    }
+    function loadConfigYaml() {
+      configYamlStatus.textContent = '加载中…';
+      configYamlStatus.className = 'config-modal-status';
+      return fetch('/config/yaml')
+        .then(response => { if (!response.ok) throw new Error('加载失败 (' + response.status + ')'); return response.text(); })
+        .then(text => { configYamlInput.value = configYamlMerged.checked ? mergeConfigYaml(text) : text; configYamlStatus.textContent = ''; })
+        .catch(error => { configYamlInput.value = ''; configYamlStatus.textContent = String(error); configYamlStatus.classList.add('is-error'); });
+    }
+    function openConfigModal() {
+      configYamlImport.disabled = false;
+      configModal.hidden = false;
+      document.body.classList.add('has-modal');
+      loadConfigYaml();
+    }
+    function closeConfigModal() {
+      configModal.hidden = true;
+      document.body.classList.remove('has-modal');
+      configYamlImport.disabled = false;
+    }
+    const secretsModal = document.querySelector('[data-secrets-modal]');
+    const secretsYamlInput = document.querySelector('[data-secrets-yaml]');
+    const secretsStatus = document.querySelector('[data-secrets-status]');
+    const secretsSave = document.querySelector('[data-secrets-save]');
+    const secretsStorageKey = 'agw-secrets';
+    function submitLocalSecrets() {
+      const stored = localStorage.getItem(secretsStorageKey);
+      if (!stored) return Promise.resolve();
+      return fetch('/config/secrets', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: stored}).catch(() => {});
+    }
+    function mergeExternalizedSecrets(pairs) {
+      let secrets = {};
+      try { secrets = JSON.parse(localStorage.getItem(secretsStorageKey) || '{}'); } catch (_) {}
+      Object.entries(pairs || {}).forEach(([key, value]) => { secrets[key] = 'b64:' + btoa(value); });
+      localStorage.setItem(secretsStorageKey, JSON.stringify(secrets));
+    }
+    // Resolve secret:<key> rows from this browser's own localStorage. The
+    // fragment only carries the reference; anything another browser injected
+    // into the server is never rendered here.
+    function lockRow(row) {
+      if (!row) return;
+      row.classList.add('is-locked');
+      row.querySelectorAll('[data-name], [data-url], [data-auth-type]').forEach(el => { el.disabled = true; });
+      const ms = row.querySelector('[data-multi-select]');
+      if (ms) {
+        const hidden = ms.querySelector('[data-app-selectors]');
+        if (hidden) hidden.disabled = true;
+        const trigger = ms.querySelector('[data-ms-trigger]');
+        if (trigger) trigger.classList.add('is-disabled');
+      }
+      const del = row.querySelector('[data-delete-row]');
+      if (del) { del.disabled = true; del.title = '凭据缺失，禁止删除'; }
+    }
+    function unlockRow(row) {
+      if (!row) return;
+      row.classList.remove('is-locked');
+      row.querySelectorAll('[data-name], [data-url], [data-auth-type], [data-app-selectors]').forEach(el => { el.disabled = false; });
+      const trigger = row.querySelector('[data-ms-trigger]');
+      if (trigger) trigger.classList.remove('is-disabled');
+      const del = row.querySelector('[data-delete-row]');
+      if (del) { del.disabled = false; del.title = '删除上游'; }
+    }
+    // A duplicate of a locked row must come back editable: drop the lock,
+    // re-enable every field and start with an empty credential input. The
+    // secret reference itself is never copied.
+    function makeDuplicateEditable(clone) {
+      const wasLocked = clone.classList.contains('is-locked') || !!clone.querySelector('.auth-locked');
+      if (!wasLocked) return;
+      clone.classList.remove('is-locked');
+      clone.querySelectorAll('[data-name], [data-url], [data-auth-type], [data-app-selectors]').forEach(el => { el.disabled = false; });
+      const trigger = clone.querySelector('[data-ms-trigger]');
+      if (trigger) trigger.classList.remove('is-disabled');
+      const del = clone.querySelector('[data-delete-row]');
+      if (del) { del.disabled = false; del.title = '删除上游'; }
+      const auth = clone.querySelector('.auth');
+      if (!auth) return;
+      auth.querySelectorAll('.auth-value, .auth-locked, input[data-auth-value]').forEach(el => el.remove());
+      const valueCell = document.createElement('span');
+      valueCell.className = 'auth-value';
+      const input = document.createElement('input');
+      input.className = 'field-input';
+      input.type = 'password';
+      input.value = '';
+      input.setAttribute('data-auth-value', '');
+      input.setAttribute('aria-label', '认证值');
+      valueCell.append(input);
+      const eye = document.createElement('button');
+      eye.className = 'icon-button';
+      eye.type = 'button';
+      eye.setAttribute('data-toggle-password', '');
+      eye.title = '显示认证值';
+      eye.setAttribute('aria-label', '显示认证值');
+      eye.innerHTML = '<i data-lucide="eye"></i>';
+      auth.append(valueCell, eye);
+    }
+    function applyLocalSecrets(scope) {
+      if (!scope) scope = document;
+      let secrets = {};
+      try { secrets = JSON.parse(localStorage.getItem(secretsStorageKey) || '{}'); } catch (_) {}
+      scope.querySelectorAll('[data-secret-key]').forEach(holder => {
+        const key = (holder.dataset.secretKey || '').replace(/^secret:/, '');
+        const raw = secrets[key];
+        const row = holder.closest('tr[data-row]');
+        if (raw === undefined) { lockRow(row); return; }
+        unlockRow(row);
+        const cell = holder.closest('.auth');
+        if (!cell) return;
+        cell.querySelectorAll('.auth-value, .auth-locked, input[data-auth-value][type="hidden"]').forEach(el => el.remove());
+        const valueCell = document.createElement('span');
+        valueCell.className = 'auth-value';
+        const input = document.createElement('input');
+        input.className = 'field-input';
+        input.type = 'password';
+        input.value = decodeSecretValue(raw);
+        input.setAttribute('data-auth-value', '');
+        input.setAttribute('aria-label', '认证值');
+        valueCell.append(input);
+        cell.append(valueCell);
+        if (!cell.querySelector('[data-toggle-password]')) {
+          const button = document.createElement('button');
+          button.className = 'icon-button';
+          button.type = 'button';
+          button.setAttribute('data-toggle-password', '');
+          button.title = '显示认证值';
+          button.setAttribute('aria-label', '显示认证值');
+          button.innerHTML = '<i data-lucide="eye"></i>';
+          cell.append(button);
+          renderIcons(button);
+        }
+      });
+    }
+    function openSecretsModal() {
+      secretsStatus.textContent = '';
+      secretsStatus.className = 'config-modal-status';
+      secretsModal.hidden = false;
+      document.body.classList.add('has-modal');
+      const stored = localStorage.getItem(secretsStorageKey) || '{}';
+      try { secretsYamlInput.value = JSON.stringify(JSON.parse(stored), null, 2); } catch (_) { secretsYamlInput.value = stored; }
+    }
+    function closeSecretsModal() {
+      secretsModal.hidden = true;
+      document.body.classList.remove('has-modal');
+    }
+    function setSessionExpanded(card, expanded) {
+      const details = card.querySelector('.session-details');
+      const toggle = card.querySelector('[data-session-toggle]');
+      card.classList.toggle('expanded', expanded);
+      if (expanded) {
+        expandedSessions.add(card.dataset.sessionId);
+        // Collapsed cards skip detail syncing while streaming; catch up from
+        // the newest frame so expanding shows fresh content immediately.
+        if (lastSessionHTML) {
+          const doc = new DOMParser().parseFromString(lastSessionHTML, 'text/html');
+          const fresh = doc.querySelector('.session-card[data-session-id="' + card.dataset.sessionId + '"]');
+          if (fresh) updateSessionCard(card, fresh);
+        }
+      } else {
+        expandedSessions.delete(card.dataset.sessionId);
+      }
+      toggle.setAttribute('aria-expanded', String(expanded));
+      details.hidden = !expanded;
+    }
+    const metricTextInterval = 2000; // ms; how often live metric text (transfer/duration) may be written
+    const pendingTextUpdates = new Map();
+    let textFlushTimer = null;
+    function scheduleTextUpdate(el, text) {
+      if (!el || el.textContent === text) return;
+      pendingTextUpdates.set(el, text);
+      if (!textFlushTimer) textFlushTimer = setTimeout(flushTextUpdates, metricTextInterval);
+    }
+    function flushTextUpdates() {
+      textFlushTimer = null;
+      pendingTextUpdates.forEach((text, el) => { if (el.isConnected && el.textContent !== text) el.textContent = text; });
+      pendingTextUpdates.clear();
+    }
+    function syncSessionSummary(oldSummary, newSummary) {
+      const indicator = oldSummary.querySelector('.session-indicator');
+      const nextIndicator = newSummary.querySelector('.session-indicator');
+      if (indicator && nextIndicator && indicator.className !== nextIndicator.className) indicator.className = nextIndicator.className;
+      const state = oldSummary.querySelector('.session-state');
+      const nextState = newSummary.querySelector('.session-state');
+      if (state && nextState) {
+        if (state.className !== nextState.className) state.className = nextState.className;
+        if (state.textContent !== nextState.textContent) state.textContent = nextState.textContent;
+      }
+      for (const selector of ['.session-path', '.session-id', '.session-selector', '.session-upstream', '.session-model']) {
+        const el = oldSummary.querySelector(selector);
+        const next = newSummary.querySelector(selector);
+        if (el && next && el.textContent !== next.textContent) el.textContent = next.textContent;
+      }
+      const metrics = [...oldSummary.querySelectorAll('.session-metric')];
+      const nextMetrics = [...newSummary.querySelectorAll('.session-metric')];
+      metrics.forEach((metric, i) => {
+        const next = nextMetrics[i];
+        if (!next) return;
+        const strong = metric.querySelector('strong');
+        const nextStrong = next.querySelector('strong');
+        if (strong && nextStrong) scheduleTextUpdate(strong, nextStrong.textContent);
+        const small = metric.querySelector('small');
+        const nextSmall = next.querySelector('small');
+        if (small && nextSmall) scheduleTextUpdate(small, nextSmall.textContent);
+      });
+    }
+    function syncSessionOverview(oldOverview, newOverview) {
+      const items = [...oldOverview.querySelectorAll('span')];
+      const nextItems = [...newOverview.querySelectorAll('span')];
+      items.forEach((item, i) => {
+        const next = nextItems[i];
+        if (!next) return;
+        const strong = item.querySelector('strong');
+        const nextStrong = next.querySelector('strong');
+        if (strong && nextStrong) {
+          if (strong.className !== nextStrong.className) strong.className = nextStrong.className;
+          scheduleTextUpdate(strong, nextStrong.textContent);
+        }
+        const small = item.querySelector('small');
+        const nextSmall = next.querySelector('small');
+        if (small && nextSmall) scheduleTextUpdate(small, nextSmall.textContent);
+      });
+    }
+    function summaryStructure(summary) { return [...summary.children].map(el => el.className).join('|'); }
+    function withScrollPreserved(node, fn) {
+      const scrollables = [...node.querySelectorAll('.header-list, .gateway-events')];
+      const positions = scrollables.map(el => el.scrollTop);
+      fn();
+      scrollables.forEach((el, i) => { el.scrollTop = positions[i]; });
+    }
+    function updateSessionCard(oldCard, newCard) {
+      const oldSummary = oldCard.querySelector('.session-summary');
+      const newSummary = newCard.querySelector('.session-summary');
+      if (oldSummary && newSummary && oldSummary.outerHTML !== newSummary.outerHTML) {
+        if (summaryStructure(oldSummary) === summaryStructure(newSummary)) syncSessionSummary(oldSummary, newSummary);
+        else { oldSummary.replaceWith(newSummary); renderIcons(newSummary); }
+      }
+      // Hidden details do not need to churn on every streaming frame; they are
+      // synced when the card is expanded.
+      if (!oldCard.classList.contains('expanded')) return;
+      const oldDetails = oldCard.querySelector('.session-details');
+      const newDetails = newCard.querySelector('.session-details');
+      if (!oldDetails || !newDetails) return;
+      const oldOverview = oldDetails.querySelector('.session-overview');
+      const newOverview = newDetails.querySelector('.session-overview');
+      if (oldOverview && newOverview && oldOverview.outerHTML !== newOverview.outerHTML) syncSessionOverview(oldOverview, newOverview);
+      const oldHeaders = oldDetails.querySelector('.session-headers');
+      const newHeaders = newDetails.querySelector('.session-headers');
+      if (oldHeaders && newHeaders && oldHeaders.outerHTML !== newHeaders.outerHTML) oldHeaders.replaceWith(newHeaders);
+      const oldEvents = oldDetails.querySelector('.session-events');
+      const newEvents = newDetails.querySelector('.session-events');
+      if (oldEvents && newEvents && oldEvents.outerHTML !== newEvents.outerHTML) oldEvents.replaceWith(newEvents);
+      const newButtons = newDetails.querySelector('[data-payload-buttons]');
+      const oldButtons = oldDetails.querySelector('[data-payload-buttons]');
+      if (newButtons && !oldButtons) { oldDetails.querySelector('.session-headers').insertAdjacentElement('afterend', newButtons); renderIcons(newButtons); }
+      else if (newButtons && oldButtons) {
+        for (const kind of ['request', 'response']) {
+          const newBtn = newButtons.querySelector('[data-payload-open="' + kind + '"]');
+          const oldBtn = oldButtons.querySelector('[data-payload-open="' + kind + '"]');
+          if (newBtn && !oldBtn) { oldButtons.insertAdjacentElement('beforeend', newBtn); renderIcons(newBtn); }
+          else if (newBtn && oldBtn) {
+            const oldMeta = oldBtn.querySelector('small');
+            const newMeta = newBtn.querySelector('small');
+            if (oldMeta && newMeta && oldMeta.textContent !== newMeta.textContent) oldMeta.textContent = newMeta.textContent;
+          }
+        }
+      }
+      if (oldCard.classList.contains('expanded')) { const toggle = oldCard.querySelector('[data-session-toggle]'); if (toggle) toggle.setAttribute('aria-expanded', 'true'); }
+    }
+    function reconcileSessionCards(html) {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const incoming = [...doc.querySelectorAll('.session-card')];
+      const incomingIds = new Set(incoming.map(card => card.dataset.sessionId));
+      const existingById = new Map([...sessionList.querySelectorAll('.session-card')].map(card => [card.dataset.sessionId, card]));
+      // Moving a card node resets the scroll position of its scrollable
+      // children (e.g. the response preview), so only move cards that are
+      // actually out of order and insert new cards at their final slot.
+      const cards = [...sessionList.querySelectorAll('.session-card')];
+      incoming.forEach((card, index) => {
+        const oldCard = existingById.get(card.dataset.sessionId);
+        if (oldCard) {
+          updateSessionCard(oldCard, card);
+          const currentIndex = cards.indexOf(oldCard);
+          if (currentIndex === index) return;
+          let reference;
+          if (currentIndex > index) reference = index < cards.length ? cards[index] : null;
+          else reference = index + 1 < cards.length ? cards[index + 1] : null;
+          withScrollPreserved(oldCard, () => sessionList.insertBefore(oldCard, reference || null));
+          cards.splice(currentIndex, 1);
+          cards.splice(index, 0, oldCard);
+          return;
+        }
+        const reference = index < cards.length ? cards[index] : null;
+        sessionList.insertBefore(card, reference || null);
+        cards.splice(index, 0, card);
+        renderIcons(card);
+      });
+      sessionList.querySelectorAll('.session-card').forEach(card => { if (!incomingIds.has(card.dataset.sessionId)) card.remove(); });
+      const empty = sessionList.querySelector('.session-empty');
+      if (incoming.length) { if (empty) empty.remove(); }
+      else if (!sessionList.querySelector('.session-card') && !empty) { const el = doc.querySelector('.session-empty'); if (el) sessionList.append(el); }
+      const count = document.querySelector('[data-session-count]');
+      if (count) count.textContent = String(incoming.length);
+    }
+    function updateSummary() { const count = table.querySelectorAll('tr[data-row]').length; const tabCount = document.querySelector('[data-upstream-tab-count]'); if (tabCount) tabCount.textContent = String(count); }
+    function updateSelectorSummary() { const count = selectorList.querySelectorAll('[data-selector]').length; const tabCount = document.querySelector('[data-selector-tab-count]'); if (tabCount) tabCount.textContent = String(count); }
+    function ensureDuplicateButtons(scope) { scope.querySelectorAll('tr[data-row]').forEach(row => { const actions = row.querySelector('.row-actions'); if (!actions || actions.querySelector('[data-duplicate-row]')) return; const remove = actions.querySelector('[data-delete-row]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-row title="复制 upstream" aria-label="复制 upstream"><i data-lucide="copy"></i></button>'); }); scope.querySelectorAll('[data-selector]').forEach(row => { const actions = row.querySelector('.selector-actions'); if (!actions || actions.querySelector('[data-duplicate-selector]')) return; const remove = actions.querySelector('[data-delete-selector]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-selector title="复制 AppSelector" aria-label="复制 AppSelector"><i data-lucide="copy"></i></button>'); }); }
+    function newRow() { return '<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="https://example.com/v1" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none" selected>none</option><option value="basic">basic</option><option value="bearer">bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="app-selectors"><div class="multi-select" data-multi-select><input type="hidden" data-app-selectors value=""><div class="ms-trigger" data-ms-trigger role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="兼容的 AppSelector"><span class="ms-chips" data-ms-chips></span><i data-lucide="chevron-down" class="ms-chevron"></i></div><div class="ms-menu" data-ms-menu hidden role="listbox" aria-multiselectable="true"></div></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>'; }
+    function registeredSelectorNames() { return [...selectorList.querySelectorAll('[data-selector]')].map(row => row.querySelector('[data-selector-name]').value.trim()).filter(Boolean); }
+    function parseSelectorList(value) { return String(value || '').split(',').map(item => item.trim()).filter(Boolean); }
+    function setMultiSelectValue(ms, names) { ms.querySelector('[data-app-selectors]').value = [...new Set(names)].join(', '); renderMultiSelect(ms); }
+    function renderMultiSelect(scope) {
+      const roots = scope.matches && scope.matches('[data-multi-select]') ? [scope] : [...scope.querySelectorAll('[data-multi-select]')];
+      roots.forEach(function (ms) {
+        const hidden = ms.querySelector('[data-app-selectors]');
+        const chips = ms.querySelector('[data-ms-chips]');
+        const menu = ms.querySelector('[data-ms-menu]');
+        const trigger = ms.querySelector('[data-ms-trigger]');
+        const registered = registeredSelectorNames();
+        const selected = parseSelectorList(hidden.value);
+        const allNames = [...new Set(registered.concat(selected))];
+        menu.innerHTML = '';
+        if (!allNames.length) {
+          const empty = document.createElement('div');
+          empty.className = 'ms-empty';
+          empty.textContent = '暂无 AppSelector，请先在下方注册';
+          menu.append(empty);
+        }
+        allNames.forEach(function (name) {
+          const label = document.createElement('label');
+          label.className = 'ms-option' + (registered.includes(name) ? '' : ' is-stale');
+          label.title = registered.includes(name) ? '' : '该 AppSelector 已不存在';
+          const check = document.createElement('input');
+          check.type = 'checkbox';
+          check.dataset.msCheck = '';
+          check.value = name;
+          check.checked = selected.includes(name);
+          const span = document.createElement('span');
+          span.textContent = name;
+          label.append(check, span);
+          menu.append(label);
+        });
+        chips.innerHTML = '';
+        if (!selected.length) {
+          const placeholder = document.createElement('span');
+          placeholder.className = 'ms-placeholder';
+          placeholder.textContent = registered.length ? '未选择（不参与路由）' : '未选择';
+          chips.append(placeholder);
+        } else {
+          selected.forEach(function (name) {
+            const chip = document.createElement('span');
+            chip.className = 'ms-chip' + (registered.includes(name) ? '' : ' is-stale');
+            chip.dataset.msChip = name;
+            const text = document.createElement('span');
+            text.textContent = name;
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.dataset.msRemove = '';
+            remove.title = '移除 ' + name;
+            remove.setAttribute('aria-label', '移除 ' + name);
+            remove.innerHTML = '<i data-lucide="x"></i>';
+            chip.append(text, remove);
+            chips.append(chip);
+          });
+        }
+        trigger.title = !selected.length && registered.length ? '未绑定任何 AppSelector：配置了 selector 时该上游不会参与路由' : '选择兼容的 AppSelector';
+        renderIcons(chips);
+      });
+    }
+    function openMultiSelect(ms) {
+      closeMultiSelects();
+      const trigger = ms.querySelector('[data-ms-trigger]');
+      const menu = ms.querySelector('[data-ms-menu]');
+      const rect = trigger.getBoundingClientRect();
+      menu.hidden = false;
+      trigger.setAttribute('aria-expanded', 'true');
+      const width = Math.min(Math.max(rect.width, 240), window.innerWidth - 16);
+      menu.style.width = width + 'px';
+      menu.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8)) + 'px';
+      menu.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+      menu.style.maxHeight = Math.max(120, Math.min(260, window.innerHeight - parseFloat(menu.style.top) - 12)) + 'px';
+    }
+    function closeMultiSelects() {
+      document.querySelectorAll('[data-multi-select]').forEach(function (ms) {
+        const menu = ms.querySelector('[data-ms-menu]');
+        ms.querySelector('[data-ms-trigger]').setAttribute('aria-expanded', 'false');
+        menu.hidden = true;
+        menu.style.width = '';
+        menu.style.left = '';
+        menu.style.top = '';
+        menu.style.maxHeight = '';
+      });
+    }
+    const ruleOperators = '<option value="exact" selected>exact</option><option value="prefix">prefix</option><option value="contains">contains</option><option value="regex">regex</option><option value="present">present</option>';
+    function ruleSwitch() { return '<label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled checked aria-label="启用规则"><span></span></label>'; }
+    function ruleDelete() { return '<button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button>'; }
+    function ruleRow(type) {
+      const controls = {
+        path: '<div class="rule-controls rule-controls-path"><select class="auth-select" data-rule-operator aria-label="匹配方式">' + ruleOperators + '</select><span class="match-value-field"><input class="field-input" data-rule-value value="" placeholder="/v1/chat/completions" aria-label="匹配路径"></span></div>',
+        header: '<div class="rule-controls rule-controls-header"><input class="field-input" data-rule-name value="" placeholder="User-Agent" aria-label="匹配 header"><select class="auth-select" data-rule-operator aria-label="匹配方式">' + ruleOperators + '</select><span class="match-value-field"><input class="field-input" data-rule-value value="" placeholder="匹配值" aria-label="匹配值"><span class="match-value-actions"><button class="icon-button match-case-toggle" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="false"><i data-lucide="case-sensitive"></i></button></span></span></div>',
+        query: '<div class="rule-controls rule-controls-query"><input class="field-input" data-rule-name value="" placeholder="api-version" aria-label="匹配 query 参数"><select class="auth-select" data-rule-operator aria-label="匹配方式">' + ruleOperators + '</select><span class="match-value-field"><input class="field-input" data-rule-value value="" placeholder="匹配值" aria-label="匹配值"><span class="match-value-actions"><button class="icon-button match-case-toggle" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="false"><i data-lucide="case-sensitive"></i></button></span></span></div>',
+        body: '<div class="rule-controls rule-controls-body"><input class="field-input" data-rule-name value="" placeholder="model" aria-label="JSON 字段"><select class="auth-select" data-rule-operator aria-label="匹配方式">' + ruleOperators + '</select><span class="match-value-field"><input class="field-input" data-rule-value value="" placeholder="匹配值" aria-label="匹配值"><span class="match-value-actions"><button class="icon-button match-case-toggle" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="false"><i data-lucide="case-sensitive"></i></button></span></span></div>',
+        rewrite: '<div class="rule-controls rule-controls-rewrite"><input class="field-input" data-rule-name value="" placeholder="model" aria-label="要重写的字段"><input class="field-input" data-rule-value value="" placeholder="gpt-5.6-luna" aria-label="重写后的值"></div>',
+        method: '<div class="rule-controls rule-controls-method">' + methodChips() + '</div>'
+      };
+      return '<div class="rule" data-rule data-rule-type="' + type + '" data-case-sensitive="false" data-enabled="true"><span class="rule-kind">' + type + '</span>' + controls[type] + ruleSwitch() + ruleDelete() + '</div>';
+    }
+    const methodOptions = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
+    function methodChips() { return methodOptions.map(method => '<label class="method-chip"><input type="checkbox" data-method="' + method + '"><span>' + method + '</span></label>').join(''); }
+    function ruleEmpty() { return '<div class="selector-no-rules" data-rule-empty>No rules - matches all requests</div>'; }
+    function ruleAddBlock() { return '<div class="rule-add"><button class="text-button" type="button" data-add-rule title="添加规则" aria-label="添加规则"><i data-lucide="plus"></i>添加规则</button><div class="rule-menu" data-rule-menu hidden role="menu" aria-label="规则类型"><button type="button" data-rule-type-option="path">Path</button><button type="button" data-rule-type-option="header">Header</button><button type="button" data-rule-type-option="body">Body</button><button type="button" data-rule-type-option="query">Query</button><button type="button" data-rule-type-option="method">Method</button><button type="button" data-rule-type-option="rewrite">Rewrite</button></div></div>'; }
+    function selectorRow() { return '<div class="selector-row" data-selector data-draggable draggable="true"><div class="selector-name-cell"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span><input class="field-input" data-selector-name value="" placeholder="selector name" aria-label="AppSelector 名称"></div><div class="selector-matches selector-rules" data-selector-rules>' + ruleEmpty() + ruleAddBlock() + '</div><div class="selector-actions"><button class="icon-button danger" type="button" data-delete-selector title="删除 AppSelector" aria-label="删除 AppSelector"><i data-lucide="trash-2"></i></button></div></div>'; }
+    function draggableRows(container) { return [...container.children].filter(node => node.matches && node.matches('[data-draggable], tr[data-row]')); }
+    function createDropIndicator() { const indicator = document.createElement(dragged.tagName === 'TR' ? 'tr' : 'div'); indicator.className = 'drop-indicator'; if (dragged.tagName === 'TR') { const cell = document.createElement('td'); cell.colSpan = 6; const label = document.createElement('span'); label.textContent = '松手后放到这里'; cell.append(label); indicator.append(cell); } else { indicator.textContent = '松手后放到这里'; } return indicator; }
+    function clearDropPreview() { if (dropIndicator) dropIndicator.remove(); dropIndicator = null; if (dragGhost) dragGhost.remove(); dragGhost = null; }
+    function capturePositions(container) { return new Map(draggableRows(container).map(row => [row, row.getBoundingClientRect().top])); }
+    function animateReorder(container, positions) { draggableRows(container).forEach(row => { const before = positions.get(row); const after = row.getBoundingClientRect().top; const offset = before == null ? 0 : before - after; if (offset) { row.style.transition = 'none'; row.style.transform = 'translateY(' + offset + 'px)'; requestAnimationFrame(() => { row.style.transition = ''; row.style.transform = ''; }); } }); }
+    function placeDropIndicator(container, before) { if (!dropIndicator) dropIndicator = createDropIndicator(); container.insertBefore(dropIndicator, before); }
+    function makeDragGhost(event, row) { if (!event.dataTransfer) return; dragGhost = document.createElement('div'); dragGhost.className = 'drag-ghost'; dragGhost.textContent = row.tagName === 'TR' ? '移动 upstream' : '移动 AppSelector'; document.body.append(dragGhost); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', 'agw-reorder'); event.dataTransfer.setDragImage(dragGhost, 18, 16); }
+    document.addEventListener('dragstart', function (event) { const row = event.target.closest('[data-draggable], tr[data-row]'); if (!row || event.target.closest('input, select, button, label')) { event.preventDefault(); return; } dragged = row; dragContainer = row.parentNode; row.classList.add('dragging'); makeDragGhost(event, row); });
+    document.addEventListener('dragover', function (event) { if (!dragged) return; const row = event.target.closest('[data-draggable], tr[data-row]'); const zone = event.target.closest('[data-drop-zone]'); const container = row ? row.parentNode : zone; if (!container || container !== dragContainer) return; event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; if (event.target.closest('.drop-indicator')) return; if (!row || row === dragged) { const rows = draggableRows(container).filter(item => item !== dragged); placeDropIndicator(container, rows.length ? rows[rows.length - 1].nextSibling : null); return; } const box = row.getBoundingClientRect(); placeDropIndicator(container, event.clientY < box.top + box.height / 2 ? row : row.nextSibling); });
+    document.addEventListener('drop', function (event) { const zone = event.target.closest('[data-drop-zone]'); if (!dragged || !zone || zone !== dragContainer || !dropIndicator) return; event.preventDefault(); const positions = capturePositions(dragContainer); dragContainer.insertBefore(dragged, dropIndicator); dropIndicator.remove(); dropIndicator = null; animateReorder(dragContainer, positions); dragged.classList.remove('dragging'); dragged.classList.add('reorder-settled'); setTimeout(() => dragged && dragged.classList.remove('reorder-settled'), 560); });
+    document.addEventListener('dragend', function () { if (dragged) dragged.classList.remove('dragging'); clearDropPreview(); dragged = null; dragContainer = null; });
+    document.addEventListener('change', function (event) {
+      const operator = event.target.closest('[data-rule-operator]');
+      if (operator) { const rule = operator.closest('[data-rule]'); const value = rule.querySelector('[data-rule-value]'); const present = operator.value === 'present'; value.disabled = present; if (present) value.value = ''; return; }
+      const enabled = event.target.closest('[data-rule-enabled]');
+      if (enabled) { const rule = enabled.closest('[data-rule]'); const on = enabled.checked; rule.dataset.enabled = String(on); rule.classList.toggle('is-disabled', !on); }
+    });
+    saveButton.addEventListener('click', async function () {
+      const upstreams = [...table.querySelectorAll('tr[data-row]')].map(row => ({name: row.querySelector('[data-name]').value.trim(), url: row.querySelector('[data-url]').value.trim(), appSelectors: row.querySelector('[data-app-selectors]').value.split(',').map(value => value.trim()).filter(Boolean), authorization: {type: row.querySelector('[data-auth-type]').value, value: row.querySelector('[data-auth-value]').value}}));
+      const appSelectors = [...document.querySelectorAll('[data-selector]')].map(row => { const path = [], query = [], headers = [], body = [], rewrite = [], method = []; row.querySelectorAll('[data-rule]').forEach(rule => { const type = rule.dataset.ruleType; const enabled = rule.dataset.enabled === 'true' ? undefined : false; const operator = (rule.querySelector('[data-rule-operator]') || {}).value || ''; const value = (rule.querySelector('[data-rule-value]') || {}).value || ''; const name = (rule.querySelector('[data-rule-name]') || {}).value.trim() || ''; if (type === 'path') path.push({operator, value, enabled}); else if (type === 'query') query.push({name, operator, value, caseSensitive: rule.dataset.caseSensitive === 'true', enabled}); else if (type === 'header') headers.push({name, operator, value, caseSensitive: rule.dataset.caseSensitive === 'true', enabled}); else if (type === 'body') body.push({field: name, operator, value, caseSensitive: rule.dataset.caseSensitive === 'true', enabled}); else if (type === 'method') { if (enabled !== false) method.push(...[...rule.querySelectorAll('[data-method]:checked')].map(cb => cb.dataset.method)); } else if (type === 'rewrite') rewrite.push({field: name, value, enabled}); }); return {name: row.querySelector('[data-selector-name]').value.trim(), methods: method, match: {path, query, headers, body}, rewrite}; });
+      const registeredNames = new Set(registeredSelectorNames());
+      const staleNames = [...new Set(upstreams.flatMap(upstream => upstream.appSelectors.filter(name => name && !registeredNames.has(name))))];
+      if (staleNames.length) {
+        status.className = 'error';
+        status.textContent = '无法保存：以下 AppSelector 不存在：' + staleNames.join('、') + '（请先在 registry 中创建，或移除对应选择）';
+        return;
+      }
+      status.className = ''; status.textContent = '保存中'; saveButton.disabled = true;
+      try {
+        const debugToggle = document.getElementById('debug-toggle');
+        const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: debugToggle ? debugToggle.checked : false, appSelectors, upstreams})});
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json().catch(() => null);
+        if (result && result.externalized) mergeExternalizedSecrets(result.externalized);
+        status.className = 'success'; status.textContent = '已保存'; htmx.trigger(table, 'load');
+      } catch (error) { status.className = 'error'; status.textContent = error.message || '保存失败'; }
+      finally { saveButton.disabled = false; }
+    });
+    document.getElementById('add-upstream').addEventListener('click', function () { table.insertAdjacentHTML('beforeend', newRow()); ensureDuplicateButtons(table); renderMultiSelect(table); renderIcons(table); updateSummary(); });
+    document.getElementById('add-selector').addEventListener('click', function () { const empty = selectorList.querySelector('.selector-empty'); if (empty) empty.remove(); selectorList.insertAdjacentHTML('beforeend', selectorRow()); ensureDuplicateButtons(selectorList); renderIcons(selectorList); updateSelectorSummary(); renderMultiSelect(document); });
+    document.getElementById('yaml-config').addEventListener('click', openConfigModal);
+    configYamlMerged.addEventListener('change', loadConfigYaml);
+    document.getElementById('secrets-config').addEventListener('click', openSecretsModal);
+    secretsSave.addEventListener('click', function () {
+      let parsed;
+      try {
+        parsed = JSON.parse(secretsYamlInput.value || '{}');
+      } catch (error) {
+        secretsStatus.textContent = '无效 JSON: ' + error.message;
+        secretsStatus.className = 'config-modal-status is-error';
+        return;
+      }
+      const text = JSON.stringify(parsed, null, 2);
+      secretsYamlInput.value = text;
+      secretsSave.disabled = true;
+      secretsStatus.textContent = '保存中…';
+      secretsStatus.className = 'config-modal-status';
+      fetch('/config/secrets', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: text})
+        .then(response => { if (!response.ok) return response.text().then(body => { throw new Error(body); }); })
+        .then(() => { localStorage.setItem(secretsStorageKey, text); applyLocalSecrets(table); secretsStatus.textContent = '已保存到浏览器并解锁'; secretsStatus.classList.add('is-success'); })
+        .catch(error => { secretsStatus.textContent = String(error.message || error); secretsStatus.classList.add('is-error'); })
+        .finally(() => { secretsSave.disabled = false; });
+    });
+    configYamlImport.addEventListener('click', function () {
+      configYamlImport.disabled = true;
+      configYamlStatus.textContent = '保存中…';
+      configYamlStatus.className = 'config-modal-status';
+      fetch('/config', {method: 'PUT', headers: {'Content-Type': 'text/yaml'}, body: configYamlInput.value})
+        .then(response => { if (!response.ok) return response.text().then(text => { throw new Error(text); }); return response.json(); })
+        .then(result => { if (result && result.externalized) mergeExternalizedSecrets(result.externalized); configYamlStatus.textContent = '已保存，刷新中…'; configYamlStatus.classList.add('is-success'); setTimeout(() => location.reload(), 400); })
+        .catch(error => { configYamlStatus.textContent = String(error.message || error); configYamlStatus.classList.add('is-error'); configYamlImport.disabled = false; });
+    });
+    themeToggle.addEventListener('click', function () { setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
+    document.addEventListener('click', function (event) {
+      const removeChip = event.target.closest('[data-ms-remove]');
+      if (removeChip) { const row = removeChip.closest('tr[data-row]'); if (row && row.classList.contains('is-locked')) return; const ms = removeChip.closest('[data-multi-select]'); const chipName = removeChip.closest('[data-ms-chip]').dataset.msChip; setMultiSelectValue(ms, parseSelectorList(ms.querySelector('[data-app-selectors]').value).filter(name => name !== chipName)); return; }
+      const trigger = event.target.closest('[data-ms-trigger]');
+      if (trigger) { const row = trigger.closest('tr[data-row]'); if (row && row.classList.contains('is-locked')) return; const ms = trigger.closest('[data-multi-select]'); const menu = ms.querySelector('[data-ms-menu]'); if (menu.hidden) openMultiSelect(ms); else closeMultiSelects(); return; }
+      if (!event.target.closest('[data-ms-menu]')) closeMultiSelects();
+    });
+    document.addEventListener('change', function (event) {
+      const check = event.target.closest('[data-ms-check]');
+      if (check) { const row = check.closest('tr[data-row]'); if (row && row.classList.contains('is-locked')) return; const ms = check.closest('[data-multi-select]'); const value = check.value; const names = new Set(parseSelectorList(ms.querySelector('[data-app-selectors]').value)); check.checked ? names.add(value) : names.delete(value); setMultiSelectValue(ms, [...names]); const next = [...ms.querySelectorAll('[data-ms-check]')].find(el => el.value === value); if (next) next.focus(); return; }
+      if (event.target.closest('[data-selector-name]')) renderMultiSelect(document);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape') { closeMultiSelects(); document.querySelectorAll('[data-rule-menu]').forEach(menu => menu.hidden = true); closePayloadModal(); closeConfigModal(); closeSecretsModal(); return; }
+      const trigger = event.target.closest('[data-ms-trigger]');
+      if (!trigger) return;
+      const row = trigger.closest('tr[data-row]');
+      if (row && row.classList.contains('is-locked')) return;
+      if (['Enter', ' ', 'ArrowDown'].includes(event.key)) {
+        event.preventDefault();
+        const ms = trigger.closest('[data-multi-select]');
+        if (ms.querySelector('[data-ms-menu]').hidden) openMultiSelect(ms);
+        const first = ms.querySelector('[data-ms-menu] input[type="checkbox"]');
+        if (first) first.focus();
+      }
+    });
+    window.addEventListener('scroll', closeMultiSelects, true);
+    window.addEventListener('resize', closeMultiSelects);
+    document.addEventListener('click', function (event) {
+      const telemetryTab = event.target.closest('[data-telemetry-tab]');
+      if (telemetryTab) { setTelemetryView(telemetryTab.dataset.telemetryTab); return; }
+      const toggle = event.target.closest('[data-toggle-password]');
+      if (toggle) { const value = toggle.parentElement.querySelector('[data-auth-value]'); const visible = value.type === 'text'; value.type = visible ? 'password' : 'text'; toggle.title = visible ? '显示认证值' : '隐藏认证值'; toggle.setAttribute('aria-label', toggle.title); toggle.innerHTML = '<i data-lucide="' + (visible ? 'eye' : 'eye-off') + '"></i>'; renderIcons(toggle); return; }
+      const caseToggle = event.target.closest('[data-toggle-case]');
+      if (caseToggle) { const rule = caseToggle.closest('[data-rule]'); const enabled = rule.dataset.caseSensitive !== 'true'; rule.dataset.caseSensitive = String(enabled); caseToggle.classList.toggle('is-active', enabled); caseToggle.setAttribute('aria-pressed', String(enabled)); caseToggle.title = enabled ? '区分大小写：开' : '区分大小写：关'; caseToggle.setAttribute('aria-label', caseToggle.title); return; }
+      const remove = event.target.closest('[data-delete-row]');
+      if (remove) { remove.closest('tr[data-row]').remove(); updateSummary(); }
+      const duplicateRow = event.target.closest('[data-duplicate-row]');
+      if (duplicateRow) { const row = duplicateRow.closest('tr[data-row]'); const clone = row.cloneNode(true); row.after(clone); makeDuplicateEditable(clone); ensureDuplicateButtons(clone); renderMultiSelect(clone); renderIcons(clone); updateSummary(); return; }
+      const addRule = event.target.closest('[data-add-rule]');
+      if (addRule) { const menu = addRule.closest('[data-selector-rules]').querySelector('[data-rule-menu]'); menu.hidden = !menu.hidden; return; }
+      const ruleOption = event.target.closest('[data-rule-type-option]');
+      if (ruleOption) { const rules = ruleOption.closest('[data-selector-rules]'); const empty = rules.querySelector('[data-rule-empty]'); if (empty) { empty.insertAdjacentHTML('beforebegin', ruleRow(ruleOption.dataset.ruleTypeOption)); empty.hidden = true; } rules.querySelector('[data-rule-menu]').hidden = true; renderIcons(rules); return; }
+      const deleteRule = event.target.closest('[data-rule-delete]');
+      if (deleteRule) { const rules = deleteRule.closest('[data-selector-rules]'); deleteRule.closest('[data-rule]').remove(); const empty = rules.querySelector('[data-rule-empty]'); if (empty && !rules.querySelector('[data-rule]')) empty.hidden = false; renderIcons(rules); return; }
+      if (!event.target.closest('[data-rule-menu]')) document.querySelectorAll('[data-rule-menu]').forEach(menu => menu.hidden = true);
+      const deleteSelector = event.target.closest('[data-delete-selector]');
+      if (deleteSelector) { deleteSelector.closest('[data-selector]').remove(); if (!selectorList.querySelector('[data-selector]')) selectorList.innerHTML = '<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>'; updateSelectorSummary(); renderMultiSelect(document); }
+      const duplicateSelector = event.target.closest('[data-duplicate-selector]');
+      if (duplicateSelector) { const row = duplicateSelector.closest('[data-selector]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderIcons(clone); updateSelectorSummary(); renderMultiSelect(document); return; }
+    });
+    document.addEventListener('click', function (event) {
+      const toggle = event.target.closest('[data-session-toggle]');
+      if (toggle) { const card = toggle.closest('.session-card'); setSessionExpanded(card, toggle.getAttribute('aria-expanded') !== 'true'); return; }
+      const payloadOpen = event.target.closest('[data-payload-open]');
+      if (payloadOpen) { const card = payloadOpen.closest('.session-card'); openPayloadModal(card.dataset.sessionId, payloadOpen.dataset.payloadOpen); return; }
+      const modalFull = event.target.closest('[data-payload-modal-full]');
+      if (modalFull) { const modal = document.querySelector('[data-payload-modal]'); window.open('/sessions/' + encodeURIComponent(modal.dataset.sessionId) + '/' + modal.dataset.kind + '?full=1', '_blank'); return; }
+      const modalPretty = event.target.closest('[data-payload-modal-pretty]');
+      if (modalPretty) {
+        const body = document.querySelector('[data-payload-modal-body]');
+        const active = modalPretty.classList.contains('is-active');
+        if (!active) {
+          try { JSON.parse(body.dataset.raw || ''); } catch (_) { return; }
+        }
+        modalPretty.classList.toggle('is-active', !active);
+        modalPretty.setAttribute('aria-pressed', String(!active));
+        setModalBody(body);
+        return;
+      }
+      const modalCopy = event.target.closest('[data-payload-modal-copy]');
+      if (modalCopy) {
+        const body = document.querySelector('[data-payload-modal-body]');
+        const text = body.dataset.raw || body.textContent;
+        copyText(text).then(() => {
+          const original = modalCopy.title;
+          modalCopy.title = '已复制';
+          modalCopy.setAttribute('aria-label', '已复制');
+          modalCopy.innerHTML = '<i data-lucide="check"></i>';
+          renderIcons(modalCopy);
+          setTimeout(() => { modalCopy.title = original; modalCopy.setAttribute('aria-label', original); modalCopy.innerHTML = '<i data-lucide="copy"></i>'; renderIcons(modalCopy); }, 1200);
+        }).catch(() => {});
+        return;
+      }
+      const modalClose = event.target.closest('[data-payload-modal-close], [data-payload-modal-backdrop]');
+      if (modalClose) { closePayloadModal(); return; }
+      const configClose = event.target.closest('[data-config-modal-close], [data-config-modal-backdrop]');
+      if (configClose) { closeConfigModal(); return; }
+      const secretsClose = event.target.closest('[data-secrets-modal-close], [data-secrets-modal-backdrop]');
+      if (secretsClose) { closeSecretsModal(); return; }
+    });
+    document.addEventListener('keydown', function (event) {
+      const current = event.target.closest('[data-telemetry-tab]');
+      if (!current || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      const tabs = [...document.querySelectorAll('[data-telemetry-tab]')]; const index = tabs.indexOf(current); let next = index;
+      if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      if (event.key === 'Home') next = 0;
+      if (event.key === 'End') next = tabs.length - 1;
+      event.preventDefault(); setTelemetryView(tabs[next].dataset.telemetryTab, true);
+    });
+    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderMultiSelect(table); applyLocalSecrets(table); renderIcons(table); updateSummary(); } });
+    const logStream = document.getElementById('log-stream');
+    const logPretty = document.querySelector('[data-log-pretty]');
+    const logConnection = document.querySelector('[data-log-connection]');
+    const logLines = [];
+    function formatLogLine(line) {
+      try { return JSON.stringify(JSON.parse(line), null, 2); } catch (_) { return line; }
+    }
+    function appendLogText(text) {
+      logStream.append(document.createTextNode(text + '\n'));
+      logStream.scrollTop = logStream.scrollHeight;
+    }
+    function renderLogLines() {
+      const pretty = logPretty.classList.contains('is-active');
+      const fragment = document.createDocumentFragment();
+      logLines.forEach(line => fragment.append(document.createTextNode((pretty ? formatLogLine(line) : line) + '\n')));
+      logStream.textContent = '';
+      logStream.append(fragment);
+      logStream.scrollTop = logStream.scrollHeight;
+    }
+    function appendLogLine(line) {
+      logLines.push(line);
+      if (logLines.length > 500) logLines.splice(0, logLines.length - 500);
+      appendLogText(logPretty.classList.contains('is-active') ? formatLogLine(line) : line);
+      const logCount = document.querySelector('[data-log-count]');
+      if (logCount) logCount.textContent = String(logLines.length);
+    }
+    const logEvents = new EventSource('/logs');
+    logEvents.onmessage = event => { if (event.data) appendLogLine(event.data); };
+    logEvents.onopen = () => { if (logConnection) logConnection.textContent = 'SSE connected'; };
+    logEvents.onerror = () => { if (logConnection) logConnection.textContent = '重连中…'; };
+    logPretty.addEventListener('click', function () {
+      const active = logPretty.classList.toggle('is-active');
+      logPretty.setAttribute('aria-pressed', String(active));
+      renderLogLines();
+    });
+    fetch('/sessions').then(response => response.text()).then(html => { lastSessionHTML = html; reconcileSessionCards(html); }).catch(() => {});
+    const sessionEvents = new EventSource('/sessions/stream');
+    let pendingSessionHTML = null;
+    let sessionReconcileTimer = null;
+    let sessionGestureActive = false;
+    let lastSessionHTML = '';
+    function scheduleSessionReconcile() {
+      if (sessionReconcileTimer) return;
+      sessionReconcileTimer = setTimeout(() => {
+        sessionReconcileTimer = null;
+        if (pendingSessionHTML != null) { const html = pendingSessionHTML; pendingSessionHTML = null; reconcileSessionCards(html); }
+      }, 80);
+    }
+    // A click in progress must not race streaming DOM updates; while the
+    // pointer is down the newest frame is buffered and reconciled afterwards.
+    sessionList.addEventListener('pointerdown', function () { sessionGestureActive = true; }, true);
+    sessionList.addEventListener('pointerup', function () { sessionGestureActive = false; scheduleSessionReconcile(); }, true);
+    sessionList.addEventListener('pointercancel', function () { sessionGestureActive = false; scheduleSessionReconcile(); }, true);
+    sessionEvents.addEventListener('sessions', event => {
+      pendingSessionHTML = event.data;
+      lastSessionHTML = event.data;
+      if (sessionGestureActive) return;
+      scheduleSessionReconcile();
+    });
+    setTheme(document.documentElement.dataset.theme || 'light');
+    const initialView = viewFromHash();
+    if (initialView) applyTelemetryView(initialView);
+    updateSelectorSummary(); ensureDuplicateButtons(document); renderMultiSelect(document); applyLocalSecrets(table); renderIcons(document); updateTabLayoutMode(); requestAnimationFrame(updateTabLayoutMode);
+    // Unlock the gateway from the browser's own secrets (write-only injection);
+    // the server never reads secrets back to us.
+    submitLocalSecrets();
+  </script>
+</body>
+</html>

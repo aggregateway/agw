@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io"
 	"net/http"
 	"os"
@@ -41,9 +41,9 @@ type sessionRequest struct {
 	RequestContentType string
 	RequestBytes       int64
 	ResponseBytes      int64
-	RequestPath        string
-	ResponsePath       string
-	ResponseFile       *os.File
+	RequestKey         string
+	ResponseKey        string
+	ResponsePayload    PayloadFile `json:"-"`
 	AppSelector        string
 	Upstream           string
 	Model              string
@@ -70,7 +70,8 @@ type sessionHub struct {
 	records     map[string]*sessionRecord
 	subscribers map[chan struct{}]struct{}
 	nextID      uint64
-	payloadDir  string
+	payloads    PayloadStore
+	sessionDir  string
 }
 
 type trackedSession struct {
@@ -121,31 +122,92 @@ type sessionEventCard struct {
 	Detail string
 }
 
-var sessionCardsTemplate = template.Must(template.New("session-cards").Parse(`{{range .}}
-<article class="session-card" data-session-id="{{.ID}}">
-  <button class="session-summary" type="button" data-session-toggle aria-expanded="false">
-    <span class="session-indicator {{.StateClass}}"></span>
-    <span class="session-primary"><span class="session-path"><b>{{.Latest.Method}}</b> {{.Latest.Path}}</span><span class="session-id">{{.ShortID}} · {{.Started}}</span></span>
-    <span class="session-cell session-selector">{{if .Latest.AppSelector}}{{.Latest.AppSelector}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
-    <span class="session-cell session-upstream">{{if .Latest.Upstream}}{{.Latest.Upstream}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
-    <span class="session-cell session-model">{{if .Latest.Model}}{{.Latest.Model}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
-    <span class="session-state {{.StateClass}}">{{.State}}</span>
-    <span class="session-metric session-status"><small>status</small><strong>{{.Status}}</strong></span>
-    <span class="session-metric session-transfer"><small>latest transfer</small><strong>{{.Latest.Bytes}}</strong></span>
-    <span class="session-metric session-duration"><small>duration</small><strong>{{.Duration}}</strong></span>
-    <i data-lucide="chevron-down" class="session-chevron"></i>
-  </button>
-  <div class="session-details" hidden>
-    <div class="session-overview"><span><small>App selector</small><strong>{{.Latest.AppSelector}}</strong></span><span><small>Model</small><strong>{{.Latest.Model}}</strong></span><span><small>Upstream</small><strong>{{.Latest.Upstream}}</strong></span><span><small>Connection</small><strong class="{{.StateClass}}">{{.State}}</strong></span><span><small>Requests</small><strong>{{.RequestCount}}</strong></span><span><small>Latest transfer</small><strong>{{.Latest.Bytes}}</strong></span><span><small>Latest duration</small><strong>{{.Latest.Duration}}</strong></span></div>
-    <section class="session-headers"><h3>Latest request headers</h3><dl class="header-list">{{range .Latest.Headers}}<div><dt>{{.Name}}</dt><dd>{{.Value}}</dd></div>{{else}}<div><dt>Headers</dt><dd>unavailable</dd></div>{{end}}</dl></section>
-    {{if or .Latest.HasRequestBody .Latest.HasResponseBody}}<div class="payload-open-buttons" data-payload-buttons>{{if .Latest.HasRequestBody}}<button class="payload-open" type="button" data-payload-open="request"><i data-lucide="arrow-up-right"></i><span>Intercepted request</span><small>{{.Latest.RequestContentType}} · {{.Latest.RequestBytes}}</small></button>{{end}}{{if .Latest.HasResponseBody}}<button class="payload-open" type="button" data-payload-open="response"><i data-lucide="arrow-down-left"></i><span>Intercepted response</span><small>{{.Latest.ContentType}} · {{.Latest.ResponseBytes}} · live tail</small></button>{{end}}</div>{{end}}
-    <section class="session-events"><h3>Gateway events</h3><ol class="gateway-events">{{range .Latest.Events}}<li><time>{{.At}}</time><span class="gateway-event-kind">{{.Kind}}</span><span>{{.Detail}}</span></li>{{else}}<li class="gateway-events-empty">Waiting for upstream activity</li>{{end}}</ol></section>
-  </div>
-</article>{{else}}<div class="session-empty">暂无 API 会话。新的请求会实时出现在这里。</div>{{end}}`))
-
 func newSessionHub() *sessionHub {
-	directory, _ := os.MkdirTemp("", "agw-sessions-")
-	return &sessionHub{records: make(map[string]*sessionRecord), subscribers: make(map[chan struct{}]struct{}), payloadDir: directory}
+	return newSessionHubWith(FilePayloads())
+}
+
+// newSessionHubPersistent builds a session hub whose metadata and payloads
+// survive restarts: records are written as JSON under dir/sessions and payload
+// bodies live under dir/payloads. Existing records are loaded on startup.
+func newSessionHubPersistent(dir string) *sessionHub {
+	payloadDir := filepath.Join(dir, "payloads")
+	hub := newSessionHubWith(FilePayloadsAt(payloadDir))
+	hub.sessionDir = dir
+	if err := os.MkdirAll(filepath.Join(dir, "sessions"), 0755); err != nil {
+		return hub
+	}
+	hub.loadRecords()
+	return hub
+}
+
+func (h *sessionHub) recordPath(id string) string {
+	return filepath.Join(h.sessionDir, "sessions", id+".json")
+}
+
+// saveRecordLocked persists a session record as JSON. It must be called with
+// h.mu held.
+func (h *sessionHub) saveRecordLocked(id string) {
+	if h.sessionDir == "" {
+		return
+	}
+	record := h.records[id]
+	if record == nil {
+		return
+	}
+	data, err := json.Marshal(record)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(h.recordPath(id), data, 0600)
+}
+
+func (h *sessionHub) deleteRecord(id string) {
+	if h.sessionDir == "" {
+		return
+	}
+	_ = os.Remove(h.recordPath(id))
+}
+
+// loadRecords restores persisted session metadata at startup. Payload bodies
+// stay on disk and are reachable again through the stored request/response
+// keys; the open write handles are not restored.
+func (h *sessionHub) loadRecords() {
+	entries, err := os.ReadDir(filepath.Join(h.sessionDir, "sessions"))
+	if err != nil {
+		return
+	}
+	var maxSequence uint64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(h.sessionDir, "sessions", entry.Name()))
+		if err != nil {
+			continue
+		}
+		var record sessionRecord
+		if json.Unmarshal(data, &record) != nil || record.ID == "" || len(record.Requests) == 0 {
+			continue
+		}
+		for _, request := range record.Requests {
+			request.ResponsePayload = nil
+			if request.Sequence > maxSequence {
+				maxSequence = request.Sequence
+			}
+		}
+		h.mu.Lock()
+		h.records[record.ID] = &record
+		h.mu.Unlock()
+	}
+	if maxSequence > h.nextID {
+		h.nextID = maxSequence
+	}
+}
+
+// newSessionHubWith builds a session hub backed by the given payload store.
+// A js/wasm build can pass MemoryPayloads() so nothing touches the filesystem.
+func newSessionHubWith(payloads PayloadStore) *sessionHub {
+	return &sessionHub{records: make(map[string]*sessionRecord), subscribers: make(map[chan struct{}]struct{}), payloads: payloads}
 }
 
 func (h *sessionHub) start(r *http.Request) *trackedSession {
@@ -159,19 +221,21 @@ func (h *sessionHub) start(r *http.Request) *trackedSession {
 	record.LastSeen = now
 	record.RequestCount++
 	request := &sessionRequest{Sequence: h.nextID, Method: r.Method, Path: r.URL.RequestURI(), StartedAt: now, State: "connecting", Headers: redactHeaders(r.Header)}
-	if h.payloadDir != "" {
-		request.RequestPath = filepath.Join(h.payloadDir, id+".request")
-		request.ResponsePath = filepath.Join(h.payloadDir, id+".response")
-		request.ResponseFile, _ = os.OpenFile(request.ResponsePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if h.payloads != nil {
+		key := id + "-" + fmt.Sprintf("%d", request.Sequence)
+		request.RequestKey = key + ".request"
+		request.ResponseKey = key + ".response"
+		request.ResponsePayload, _ = h.payloads.Create(request.ResponseKey)
 	}
 	record.Requests = append(record.Requests, request)
 	if len(record.Requests) > maxRequestsPerSession {
 		pruned := record.Requests[:len(record.Requests)-maxRequestsPerSession]
 		record.Requests = record.Requests[len(record.Requests)-maxRequestsPerSession:]
-		removePayloadFiles(pruned)
+		h.removePayloads(pruned)
 	}
 	h.publishLocked()
 	h.evictLocked()
+	h.saveRecordLocked(id)
 	return &trackedSession{hub: h, sessionID: id, sequence: request.Sequence}
 }
 
@@ -193,23 +257,24 @@ func (h *sessionHub) evictLocked() {
 		}
 		record := h.records[oldestID]
 		for _, request := range record.Requests {
-			if request.ResponseFile != nil {
-				_ = request.ResponseFile.Close()
-			}
+			h.removePayloads([]*sessionRequest{request})
 		}
-		removePayloadFiles(record.Requests)
+		h.deleteRecord(oldestID)
 		delete(h.records, oldestID)
 	}
 }
 
-func removePayloadFiles(requests []*sessionRequest) {
+func (h *sessionHub) removePayloads(requests []*sessionRequest) {
 	for _, request := range requests {
-		if request.RequestPath != "" {
-			_ = os.Remove(request.RequestPath)
+		if h.payloads == nil {
+			continue
 		}
-		if request.ResponsePath != "" {
-			_ = os.Remove(request.ResponsePath)
+		if request.ResponsePayload != nil {
+			_ = request.ResponsePayload.Close()
+			request.ResponsePayload = nil
 		}
+		_ = h.payloads.Remove(request.RequestKey)
+		_ = h.payloads.Remove(request.ResponseKey)
 	}
 }
 
@@ -239,11 +304,11 @@ func (t *trackedSession) setContentType(contentType string) {
 }
 
 func (t *trackedSession) setRequestBody(contentType string, body []byte) {
-	path := t.hub.requestPath(t)
+	key := t.hub.requestKey(t)
 	var bytesWritten int64
 	model := ""
-	if len(body) > 0 && path != "" {
-		if err := os.WriteFile(path, body, 0600); err == nil {
+	if len(body) > 0 && key != "" && t.hub.payloads != nil {
+		if err := t.hub.payloads.WriteRequest(key, body); err == nil {
 			bytesWritten = int64(len(body))
 		}
 	}
@@ -294,9 +359,9 @@ func (t *trackedSession) complete(status, bytes int, contextErr error) {
 		default:
 			request.State = "interrupted"
 		}
-		if request.ResponseFile != nil {
-			_ = request.ResponseFile.Close()
-			request.ResponseFile = nil
+		if request.ResponsePayload != nil {
+			_ = request.ResponsePayload.Close()
+			request.ResponsePayload = nil
 		}
 	})
 }
@@ -313,6 +378,7 @@ func (h *sessionHub) updateRequest(tracked *trackedSession, update func(*session
 			update(request)
 			record.LastSeen = time.Now()
 			h.publishLocked()
+			h.saveRecordLocked(tracked.sessionID)
 			return
 		}
 	}
@@ -332,20 +398,21 @@ func (h *sessionHub) captureResponse(tracked *trackedSession, data []byte) {
 		request.Bytes += len(data)
 		request.ResponseBytes += int64(len(data))
 		record.LastSeen = time.Now()
-		file := request.ResponseFile
+		payload := request.ResponsePayload
 		shouldPublish := request.LastPreview.IsZero() || time.Since(request.LastPreview) >= responsePreviewInterval
 		if shouldPublish {
 			request.LastPreview = time.Now()
 		}
 		h.mu.Unlock()
-		if file != nil {
-			_, _ = file.Write(data)
+		if payload != nil {
+			_, _ = payload.Write(data)
 		}
+		h.mu.Lock()
 		if shouldPublish {
-			h.mu.Lock()
+			h.saveRecordLocked(tracked.sessionID)
 			h.publishLocked()
-			h.mu.Unlock()
 		}
+		h.mu.Unlock()
 		return
 	}
 	h.mu.Unlock()
@@ -380,7 +447,7 @@ func (h *sessionHub) cards() []sessionCard {
 
 func (h *sessionHub) renderCards() (string, error) {
 	var output bytes.Buffer
-	if err := sessionCardsTemplate.Execute(&output, h.cards()); err != nil {
+	if err := getTemplate("session-cards.html").Execute(&output, h.cards()); err != nil {
 		return "", err
 	}
 	return output.String(), nil
@@ -390,24 +457,24 @@ func (h *sessionHub) close() {
 	h.mu.Lock()
 	for _, record := range h.records {
 		for _, request := range record.Requests {
-			if request.ResponseFile != nil {
-				_ = request.ResponseFile.Close()
+			if request.ResponsePayload != nil {
+				_ = request.ResponsePayload.Close()
 			}
 		}
 	}
-	directory := h.payloadDir
-	h.payloadDir = ""
+	payloads := h.payloads
+	h.payloads = nil
 	h.mu.Unlock()
-	if directory != "" {
-		_ = os.RemoveAll(directory)
+	if payloads != nil {
+		_ = payloads.Close()
 	}
 }
 
-func (h *sessionHub) requestPath(tracked *trackedSession) string {
+func (h *sessionHub) requestKey(tracked *trackedSession) string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if request := h.findRequestLocked(tracked); request != nil {
-		return request.RequestPath
+		return request.RequestKey
 	}
 	return ""
 }
@@ -420,36 +487,27 @@ func (h *sessionHub) readPayload(sessionID, kind string, tail int64) ([]byte, bo
 		return nil, false, nil
 	}
 	request := record.Requests[len(record.Requests)-1]
-	path := request.RequestPath
+	key := request.RequestKey
 	if kind == "response" {
-		path = request.ResponsePath
+		key = request.ResponseKey
 	}
 	h.mu.Unlock()
-	if path == "" {
+	if key == "" || h.payloads == nil {
 		return nil, false, nil
 	}
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, true, nil
-	}
+	data, err := h.payloads.Read(key, tail)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, false, nil
+		}
 		return nil, true, err
 	}
-	defer file.Close()
-	if tail > 0 {
-		if info, err := file.Stat(); err == nil && info.Size() > tail {
-			if _, err := file.Seek(-tail, io.SeekEnd); err != nil {
-				return nil, true, err
-			}
-		}
-	}
-	data, err := io.ReadAll(file)
-	return data, true, err
+	return data, true, nil
 }
 
-// payloadInfo resolves the on-disk payload file for a session and the content
-// type recorded for it.
-func (h *sessionHub) payloadInfo(sessionID, kind string) (path, contentType string, found bool) {
+// payloadInfo resolves the payload key for a session and the content type
+// recorded for it.
+func (h *sessionHub) payloadInfo(sessionID, kind string) (key, contentType string, found bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	record := h.records[sessionID]
@@ -458,9 +516,9 @@ func (h *sessionHub) payloadInfo(sessionID, kind string) (path, contentType stri
 	}
 	request := record.Requests[len(record.Requests)-1]
 	if kind == "response" {
-		return request.ResponsePath, request.ContentType, request.ResponsePath != ""
+		return request.ResponseKey, request.ContentType, request.ResponseKey != ""
 	}
-	return request.RequestPath, request.RequestContentType, request.RequestPath != ""
+	return request.RequestKey, request.RequestContentType, request.RequestKey != ""
 }
 
 func (h *sessionHub) subscribe() chan struct{} {
@@ -554,16 +612,25 @@ func (p *Proxy) serveSessionPayload(w http.ResponseWriter, r *http.Request) {
 	// tail, so the whole response can be inspected without loading it on every
 	// live refresh.
 	if r.URL.Query().Get("full") == "1" {
-		path, contentType, found := p.Sessions.payloadInfo(parts[0], parts[1])
+		_, contentType, found := p.Sessions.payloadInfo(parts[0], parts[1])
 		if !found {
 			http.NotFound(w, r)
+			return
+		}
+		data, found, err := p.Sessions.readPayload(parts[0], parts[1], 0)
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, "failed to read session payload", http.StatusInternalServerError)
 			return
 		}
 		if contentType == "" {
 			contentType = "text/plain; charset=utf-8"
 		}
 		w.Header().Set("Content-Type", contentType)
-		http.ServeFile(w, r, path)
+		_, _ = w.Write(data)
 		return
 	}
 	var tail int64

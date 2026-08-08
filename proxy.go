@@ -71,6 +71,7 @@ type QueryMatch struct {
 
 type AppSelector struct {
 	Name    string           `yaml:"name" json:"name"`
+	Methods []string         `yaml:"methods,omitempty" json:"methods,omitempty"`
 	Match   AppSelectorMatch `yaml:"match,omitempty" json:"match,omitempty"`
 	Rewrite []FieldRewrite   `yaml:"rewrite,omitempty" json:"rewrite,omitempty"`
 }
@@ -98,7 +99,7 @@ func (r FieldRewrite) RuleEnabled() bool { return r.Enabled == nil || *r.Enabled
 
 // HasRules reports whether a selector defines any rules (enabled or disabled).
 func (s AppSelector) HasRules() bool {
-	return len(s.Match.Path)+len(s.Match.Query)+len(s.Match.Headers)+len(s.Match.Body)+len(s.Rewrite) > 0
+	return len(s.Methods)+len(s.Match.Path)+len(s.Match.Query)+len(s.Match.Headers)+len(s.Match.Body)+len(s.Rewrite) > 0
 }
 
 type Settings struct {
@@ -111,7 +112,7 @@ type Proxy struct {
 	Upstreams []Upstream
 	Client    *http.Client
 	Logger    Logger
-	Config    string
+	Config    ConfigStore
 	LogHub    *logHub
 	Sessions  *sessionHub
 	// AllowDebug gates the config's debug flag. When false, debug header
@@ -123,8 +124,41 @@ type Proxy struct {
 	Mu           sync.RWMutex
 }
 
-func loadSettings(path string) (Settings, error) {
-	data, err := os.ReadFile(path)
+// ConfigStore persists the gateway configuration. The file-backed
+// implementation is the default; a js/wasm build can substitute an in-memory
+// store so no filesystem is needed.
+type ConfigStore interface {
+	Read() ([]byte, error)
+	Write(data []byte, mode os.FileMode) error
+}
+
+type fileConfigStore struct{ path string }
+
+func (s fileConfigStore) Read() ([]byte, error) { return os.ReadFile(s.path) }
+func (s fileConfigStore) Write(data []byte, mode os.FileMode) error {
+	return os.WriteFile(s.path, data, mode)
+}
+
+// FileConfig returns a ConfigStore backed by the file at path.
+func FileConfig(path string) ConfigStore { return fileConfigStore{path: path} }
+
+// MemoryConfig returns a ConfigStore that keeps the config in memory, so a
+// js/wasm build never touches the filesystem.
+func MemoryConfig() ConfigStore { return &memoryConfigStore{} }
+
+type memoryConfigStore struct{ data []byte }
+
+func (s *memoryConfigStore) Read() ([]byte, error) {
+	return append([]byte(nil), s.data...), nil
+}
+
+func (s *memoryConfigStore) Write(data []byte, _ os.FileMode) error {
+	s.data = append([]byte(nil), data...)
+	return nil
+}
+
+func loadSettings(store ConfigStore) (Settings, error) {
+	data, err := store.Read()
 	if err != nil {
 		return Settings{}, err
 	}
@@ -158,6 +192,13 @@ func validateSettings(settings *Settings) error {
 			return fmt.Errorf("app selector name %q is duplicated", name)
 		}
 		selectorNames[name] = struct{}{}
+		for j, method := range selector.Methods {
+			method = strings.ToUpper(strings.TrimSpace(method))
+			if method == "" || strings.ContainsAny(method, " \t\r\n") {
+				return fmt.Errorf("app selector %q has an invalid HTTP method %q", name, method)
+			}
+			selector.Methods[j] = method
+		}
 		for j := range selector.Match.Headers {
 			matcher := &selector.Match.Headers[j]
 			if !matcher.RuleEnabled() {
@@ -600,7 +641,20 @@ func queryMatchMatches(matcher QueryMatch, query url.Values) bool {
 	return false
 }
 
-func appSelectorMatches(selector AppSelector, path string, query url.Values, headers http.Header, body []byte) bool {
+func appSelectorMatches(selector AppSelector, method, path string, query url.Values, headers http.Header, body []byte) bool {
+	if len(selector.Methods) > 0 {
+		m := strings.ToUpper(strings.TrimSpace(method))
+		allowed := false
+		for _, want := range selector.Methods {
+			if m == want {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return false
+		}
+	}
 	for _, matcher := range selector.Match.Path {
 		if !matcher.RuleEnabled() {
 			continue
@@ -959,7 +1013,7 @@ func upstreamSupportsSelector(upstream Upstream, selector string) bool {
 	return false
 }
 
-func routeUpstreams(upstreams []Upstream, selectors []AppSelector, path string, query url.Values, headers http.Header, body []byte) ([]routedUpstream, string, error) {
+func routeUpstreams(upstreams []Upstream, selectors []AppSelector, method, path string, query url.Values, headers http.Header, body []byte) ([]routedUpstream, string, error) {
 	if len(selectors) == 0 {
 		routed := make([]routedUpstream, 0, len(upstreams))
 		for index, upstream := range upstreams {
@@ -968,7 +1022,7 @@ func routeUpstreams(upstreams []Upstream, selectors []AppSelector, path string, 
 		return routed, "", nil
 	}
 	for _, selector := range selectors {
-		if !appSelectorMatches(selector, path, query, headers, body) {
+		if !appSelectorMatches(selector, method, path, query, headers, body) {
 			continue
 		}
 		routed := make([]routedUpstream, 0, len(upstreams))
@@ -1002,6 +1056,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	setCORSHeaders(w)
 	if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if pwaContentTypes[r.URL.Path] != "" {
+		servePWAFile(w, r)
 		return
 	}
 
@@ -1063,7 +1121,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if session != nil {
 		originalModel, _ = bodyFieldValue(body, "model")
 	}
-	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.URL.Path, r.URL.Query(), r.Header, body)
+	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.Method, r.URL.Path, r.URL.Query(), r.Header, body)
 	if routeErr != nil {
 		p.Logger.Info("route no match", "error", routeErr.Error())
 		if session != nil {
@@ -1336,7 +1394,7 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.Mu.Lock()
-	err = os.WriteFile(p.Config, encoded, 0600)
+	err = p.Config.Write(encoded, 0600)
 	if err == nil {
 		p.Upstreams = settings.Upstreams
 		p.AppSelectors = settings.AppSelectors
