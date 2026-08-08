@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestAuthorizationHeader(t *testing.T) {
@@ -1017,7 +1019,7 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 	recorder := httptest.NewRecorder()
 
 	proxy.ServeHTTP(recorder, req)
-	if recorder.Code != http.StatusNoContent {
+	if recorder.Code != http.StatusOK {
 		t.Fatalf("response status = %d", recorder.Code)
 	}
 	if !proxy.Debug || len(proxy.Upstreams) != 1 || proxy.Upstreams[0].URL != "https://new.example" || len(proxy.AppSelectors) != 1 || !proxy.AppSelectors[0].Match.Headers[0].CaseSensitive {
@@ -1320,6 +1322,16 @@ func TestBasicAuthProtectsManagementPaths(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized || recorder.Header().Get("WWW-Authenticate") == "" {
 		t.Fatalf("unauthenticated management request = %d, challenge=%q", recorder.Code, recorder.Header().Get("WWW-Authenticate"))
 	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config/yaml", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated config yaml request = %d", recorder.Code)
+	}
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config/secrets", nil))
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated secrets request = %d", recorder.Code)
+	}
 
 	request := httptest.NewRequest(http.MethodGet, "/sessions", nil)
 	request.SetBasicAuth("admin", "wrong")
@@ -1352,6 +1364,294 @@ func TestBasicAuthProtectsManagementPaths(t *testing.T) {
 	}
 }
 
+func secretValuesContain(values map[string]string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestConfigYAMLViewAndImport(t *testing.T) {
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "sk-secret"}, AppSelectors: []string{"chat"}}},
+		AppSelectors: []AppSelector{{Name: "chat", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/chat/completions"}}}}},
+		Debug:        true,
+		Config:       t.TempDir() + "/config.yaml",
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config/yaml", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("config yaml status = %d", recorder.Code)
+	}
+	var viewed Settings
+	if err := yaml.Unmarshal(recorder.Body.Bytes(), &viewed); err != nil {
+		t.Fatalf("config yaml is not valid YAML: %v\n%s", err, recorder.Body.String())
+	}
+	if !viewed.Debug || len(viewed.Upstreams) != 1 || viewed.Upstreams[0].Name != "openai" || viewed.Upstreams[0].Authorization.Value != "sk-secret" {
+		t.Fatalf("config yaml does not round-trip settings: %s", recorder.Body.String())
+	}
+
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/config/yaml", strings.NewReader(`debug: false
+upstreams:
+  - url: https://deepseek.example/v1
+    name: deepseek
+    authorization:
+      type: bearer
+      value: sk-ds
+`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("config yaml import status = %d", recorder.Code)
+	}
+	var importResult struct {
+		Externalized map[string]string `json:"externalized"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &importResult); err != nil {
+		t.Fatalf("config yaml import response is not JSON: %v", err)
+	}
+	if !secretValuesContain(importResult.Externalized, "sk-ds") {
+		t.Fatalf("imported literal was not echoed back as externalized: %#v", importResult.Externalized)
+	}
+	if proxy.Debug || len(proxy.Upstreams) != 1 || proxy.Upstreams[0].Name != "deepseek" || !strings.HasPrefix(proxy.Upstreams[0].Authorization.Value, "secret:") || !secretValuesContain(proxy.SecretValues, "sk-ds") {
+		t.Fatalf("imported config not applied: debug=%t upstreams=%#v", proxy.Debug, proxy.Upstreams)
+	}
+}
+
+func TestConfigYAMLNeverLeaksSecrets(t *testing.T) {
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:key1"}}},
+		SecretValues: map[string]string{"key1": "sk-super-secret"},
+		Config:       t.TempDir() + "/config.yaml",
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	// The config export is always the disk form (refs only), even if a merge
+	// query is attempted; merging happens client-side from the browser storage.
+	for _, path := range []string{"/config/yaml", "/config/yaml?merged=1"} {
+		recorder := httptest.NewRecorder()
+		proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		body := recorder.Body.String()
+		if strings.Contains(body, "sk-super-secret") || !strings.Contains(body, "secret:key1") {
+			t.Fatalf("export %s = %s", path, body)
+		}
+	}
+}
+
+func TestResolveAuthValue(t *testing.T) {
+	t.Setenv("AGW_TEST_KEY", "env-value")
+	secrets := map[string]string{"openai": "sk-abc"}
+	got, err := resolveAuthValue("secret:openai", secrets)
+	if err != nil || got != "sk-abc" {
+		t.Fatalf("secret ref = %q err=%v", got, err)
+	}
+	got, err = resolveAuthValue("env:AGW_TEST_KEY", nil)
+	if err != nil || got != "env-value" {
+		t.Fatalf("env ref = %q err=%v", got, err)
+	}
+	got, err = resolveAuthValue("plain", nil)
+	if err != nil || got != "plain" {
+		t.Fatalf("literal = %q err=%v", got, err)
+	}
+	if _, err := resolveAuthValue("secret:missing", secrets); err == nil {
+		t.Fatal("unknown secret must error")
+	}
+	if _, err := resolveAuthValue("env:AGW_TEST_MISSING_VAR", nil); err == nil {
+		t.Fatal("empty env var must error")
+	}
+}
+
+func TestProxyResolvesSecretAuth(t *testing.T) {
+	t.Setenv("AGW_TEST_TOKEN", "sk-resolved")
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{URL: upstream.URL, Authorization: &Authorization{Type: "bearer", Value: "secret:test"}}},
+		SecretValues: map[string]string{"test": "sk-resolved"},
+		Client:       http.DefaultClient,
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`)))
+	if recorder.Code != http.StatusOK || gotAuth != "Bearer sk-resolved" {
+		t.Fatalf("upstream auth = %q status=%d", gotAuth, recorder.Code)
+	}
+}
+
+func TestConfigYAMLDoesNotLeakSecretValues(t *testing.T) {
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:openai"}}},
+		SecretValues: map[string]string{"openai": "sk-super-secret"},
+		Config:       t.TempDir() + "/config.yaml",
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config/yaml", nil))
+	body := recorder.Body.String()
+	if strings.Contains(body, "sk-super-secret") {
+		t.Fatalf("config yaml leaks resolved secret value: %s", body)
+	}
+	if !strings.Contains(body, "secret:openai") {
+		t.Fatalf("config yaml does not keep secret references: %s", body)
+	}
+}
+
+func TestConfigUpdatePreservesSecretReferences(t *testing.T) {
+	configPath := t.TempDir() + "/config.yaml"
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:openai"}}},
+		SecretValues: map[string]string{"openai": "sk-original"},
+		Config:       configPath,
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"upstreams":[{"name":"openai","url":"https://api.openai.com/v1","authorization":{"type":"bearer","value":"secret:openai"}}],"appSelectors":[]}`)))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("config update status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var result struct {
+		Externalized map[string]string `json:"externalized"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatalf("config update response is not JSON: %v", err)
+	}
+	if len(result.Externalized) != 0 {
+		t.Fatalf("no new secrets expected, got %#v", result.Externalized)
+	}
+	if !proxy.Debug || proxy.SecretValues["openai"] != "sk-original" || proxy.Upstreams[0].Authorization.Value != "secret:openai" {
+		t.Fatalf("secret reference was not preserved: debug=%t values=%#v upstream=%q", proxy.Debug, proxy.SecretValues, proxy.Upstreams[0].Authorization.Value)
+	}
+	onDisk, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(onDisk), "sk-original") || !strings.Contains(string(onDisk), "secret:openai") {
+		t.Fatalf("config on disk leaked value or dropped reference: %s", onDisk)
+	}
+}
+
+func TestConfigSecretsEndpoints(t *testing.T) {
+	proxy := &Proxy{
+		SecretValues: map[string]string{"key1": "sk-one"},
+		Config:       t.TempDir() + "/config.yaml",
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+	}
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/config/secrets", strings.NewReader(`{"key2":"b64:`+base64.StdEncoding.EncodeToString([]byte("sk-two"))+`","key3":"sk-plain"}`)))
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("post secrets status = %d", recorder.Code)
+	}
+	if proxy.SecretValues["key2"] != "sk-two" || proxy.SecretValues["key3"] != "sk-plain" || proxy.SecretValues["key1"] != "sk-one" {
+		t.Fatalf("secrets not merged: %#v", proxy.SecretValues)
+	}
+	// The endpoint is write-only: reads must be rejected.
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/config/secrets", nil))
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("get secrets status = %d, want 405 (write-only)", recorder.Code)
+	}
+	if _, err := decodeSecretValue("b64:!!!"); err == nil {
+		t.Fatal("invalid b64 value must error")
+	}
+	if got, err := decodeSecretValue("qlNkRVG1pHQZDb2qD1uWBxc84ZgvLoXGPWiaclppKNom08Fx"); err != nil || got != "qlNkRVG1pHQZDb2qD1uWBxc84ZgvLoXGPWiaclppKNom08Fx" {
+		t.Fatalf("base64-shaped plaintext must pass through: %q err=%v", got, err)
+	}
+}
+
+func TestConfigViewsKeepsSecretReferencesForBrowserResolution(t *testing.T) {
+	views := configViews([]Upstream{
+		{Name: "open", Authorization: &Authorization{Type: "bearer", Value: "secret:known"}},
+		{Name: "locked", Authorization: &Authorization{Type: "bearer", Value: "secret:missing"}},
+		{Name: "plain", Authorization: &Authorization{Type: "bearer", Value: "sk-literal"}},
+		{Name: "none", Authorization: &Authorization{Type: "none", Value: ""}},
+	})
+	if !views[0].AuthIsSecret || views[0].AuthValue != "secret:known" {
+		t.Fatalf("secret reference upstream = %#v", views[0])
+	}
+	if !views[1].AuthIsSecret || views[1].AuthValue != "secret:missing" {
+		t.Fatalf("missing secret upstream = %#v", views[1])
+	}
+	if views[2].AuthIsSecret || views[2].AuthValue != "sk-literal" {
+		t.Fatalf("literal upstream = %#v", views[2])
+	}
+	if views[3].AuthIsSecret || views[3].AuthValue != "" {
+		t.Fatalf("none upstream must not be treated as a secret: %#v", views[3])
+	}
+}
+
+func TestExternalizeSecrets(t *testing.T) {
+	upstreams := []Upstream{
+		{Authorization: &Authorization{Type: "bearer", Value: "sk-one"}},
+		{Authorization: &Authorization{Type: "bearer", Value: "sk-one"}},
+		{Authorization: &Authorization{Type: "bearer", Value: "env:TOKEN"}},
+		{Authorization: &Authorization{Type: "bearer", Value: "secret:existing"}},
+	}
+	out, values, changed, err := externalizeSecrets(upstreams, map[string]string{"existing": "sk-old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("literal auth values should mark a migration")
+	}
+	if !strings.HasPrefix(out[0].Authorization.Value, "secret:") || out[1].Authorization.Value != out[0].Authorization.Value {
+		t.Fatalf("same literal should reuse one key: %q %q", out[0].Authorization.Value, out[1].Authorization.Value)
+	}
+	if out[2].Authorization.Value != "env:TOKEN" {
+		t.Fatalf("env reference must pass through: %q", out[2].Authorization.Value)
+	}
+	if out[3].Authorization.Value != "secret:existing" || values["existing"] != "sk-old" {
+		t.Fatalf("existing secret not preserved: %q values=%#v", out[3].Authorization.Value, values)
+	}
+	if len(values) != 2 {
+		t.Fatalf("values = %#v, want 2 entries", values)
+	}
+	// References to not-yet-injected secrets are tolerated and kept as-is;
+	// the upstream stays locked until the browser provides the value.
+	out, values, _, err = externalizeSecrets([]Upstream{{Authorization: &Authorization{Type: "bearer", Value: "secret:missing"}}}, map[string]string{})
+	if err != nil || out[0].Authorization.Value != "secret:missing" || len(values) != 0 {
+		t.Fatalf("unknown ref must be tolerated: %#v values=%#v err=%v", out, values, err)
+	}
+}
+
+func TestExternalizeSecretsKeysIndependentPerValue(t *testing.T) {
+	// First save: two upstreams sharing one literal share one key.
+	first, values, _, err := externalizeSecrets([]Upstream{
+		{Authorization: &Authorization{Type: "bearer", Value: "sk-shared"}},
+		{Authorization: &Authorization{Type: "bearer", Value: "sk-shared"}},
+	}, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first[0].Authorization.Value != first[1].Authorization.Value {
+		t.Fatalf("identical values should share one key: %q %q", first[0].Authorization.Value, first[1].Authorization.Value)
+	}
+
+	// Second save: changing one value must give it a new key while the
+	// untouched upstream keeps its original reference.
+	second, values2, _, err := externalizeSecrets([]Upstream{
+		{Authorization: &Authorization{Type: "bearer", Value: "sk-new"}},
+		{Authorization: &Authorization{Type: "bearer", Value: "sk-shared"}},
+	}, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second[0].Authorization.Value == first[0].Authorization.Value {
+		t.Fatal("changed value must get a new key")
+	}
+	if second[1].Authorization.Value != first[1].Authorization.Value {
+		t.Fatalf("unchanged value must keep its key: %q vs %q", second[1].Authorization.Value, first[1].Authorization.Value)
+	}
+	if values2[strings.TrimPrefix(second[0].Authorization.Value, "secret:")] != "sk-new" {
+		t.Fatalf("new key does not map to the new value: %#v", values2)
+	}
+}
+
 func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, false)
@@ -1362,7 +1662,7 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("config page Cache-Control = %q, want no-store", got)
 	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<", "data-payload-modal", "data-log-pretty", "data-log-connection"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<", "data-payload-modal", "data-log-pretty", "data-log-connection", "yaml-config", "data-config-modal", "data-config-yaml", "data-config-yaml-merged", "secrets-config", "data-secrets-modal", "data-secrets-yaml"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
 		}
@@ -1376,6 +1676,9 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing session journal JS %q", expected)
 		}
+	}
+	if strings.Contains(content, "data-config-yaml-merged checked") {
+		t.Fatalf("config page must not enable merged YAML display by default")
 	}
 	workspace := strings.Index(content, `aria-labelledby="routing-title"`)
 	addUpstream := strings.Index(content, `id="add-upstream"`)
@@ -1420,6 +1723,31 @@ func TestConfigFragmentRendersMultiSelectForAppSelectors(t *testing.T) {
 	}
 	if strings.Contains(content, `placeholder="codex, default"`) {
 		t.Fatalf("config fragment still uses a free-text app selector input")
+	}
+}
+
+func TestConfigFragmentRendersSecretLockWithoutResolving(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveConfigFragment(recorder, []Upstream{
+		{Name: "locked", URL: "https://example.com/v1", Authorization: &Authorization{Type: "bearer", Value: "secret:missing"}},
+		{Name: "none", URL: "https://example.com/v2", Authorization: &Authorization{Type: "none", Value: ""}},
+	})
+	content := recorder.Body.String()
+	for _, expected := range []string{`data-lucide="lock"`, `<span class="auth-value"><input class="field-input auth-placeholder" type="password" value="••••••" aria-label="认证值（锁定）" disabled></span>`, `<span class="auth-locked" data-secret-key="secret:missing" title="当前浏览器未持有该密钥，已锁定"><i data-lucide="lock"></i></span>`, `<input type="hidden" data-auth-value value="secret:missing">`} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config fragment missing secret lock %q", expected)
+		}
+	}
+	// The reference must only appear in attributes (data-secret-key and the
+	// hidden value), never as visible text in the row.
+	if strings.Count(content, "secret:missing") != 2 {
+		t.Fatalf("secret reference should appear exactly twice (attribute only), got:\n%s", content)
+	}
+	if strings.Count(content, `data-secret-key=`) != 1 {
+		t.Fatalf("only the secret-reference upstream should carry a secret key, got:\n%s", content)
+	}
+	if !strings.Contains(content, `<input type="hidden" data-auth-value value="">`) {
+		t.Fatalf("none-type upstream should render an empty hidden auth value, got:\n%s", content)
 	}
 }
 

@@ -3,7 +3,9 @@ package agw
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,15 +116,8 @@ type Proxy struct {
 	Sessions     *sessionHub
 	Debug        bool
 	AppSelectors []AppSelector
+	SecretValues map[string]string
 	Mu           sync.RWMutex
-}
-
-func loadConfig(path string) ([]Upstream, error) {
-	settings, err := loadSettings(path)
-	if err != nil {
-		return nil, err
-	}
-	return settings.Upstreams, nil
 }
 
 func loadSettings(path string) (Settings, error) {
@@ -268,6 +263,124 @@ func supportedAuthorizationType(authType string) bool {
 	default:
 		return false
 	}
+}
+
+// resolveAuthValue turns an authorization value into the actual credential:
+// literal values pass through, secret:<name> looks up the secrets map, and
+// env:<VAR> reads the process environment.
+func resolveAuthValueLazy(value string, lookup func(string) (string, bool)) (string, error) {
+	if strings.HasPrefix(value, "secret:") {
+		name := strings.TrimPrefix(value, "secret:")
+		if v, ok := lookup(name); ok {
+			return v, nil
+		}
+		return "", fmt.Errorf("unknown secret %q", name)
+	}
+	if strings.HasPrefix(value, "env:") {
+		name := strings.TrimPrefix(value, "env:")
+		v := os.Getenv(name)
+		if v == "" {
+			return "", fmt.Errorf("environment variable %q is empty", name)
+		}
+		return v, nil
+	}
+	return value, nil
+}
+
+func resolveAuthValue(value string, secretValues map[string]string) (string, error) {
+	return resolveAuthValueLazy(value, func(key string) (string, bool) {
+		v, ok := secretValues[key]
+		return v, ok
+	})
+}
+
+// decodeSecretValue decodes values marked with a b64: prefix. Values without
+// the prefix (legacy plaintext, including tokens that merely look like
+// base64) are used verbatim so nothing gets corrupted.
+func decodeSecretValue(stored string) (string, error) {
+	if strings.HasPrefix(stored, "b64:") {
+		value, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(stored, "b64:"))
+		if err != nil {
+			return "", fmt.Errorf("invalid base64 value: %w", err)
+		}
+		return string(value), nil
+	}
+	return stored, nil
+}
+
+// newSecretKey generates an opaque, user-invisible key linking config.yaml
+// references to values in the secrets file.
+func newSecretKey() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		panic("crypto/rand failure: " + err.Error())
+	}
+	return hex.EncodeToString(buf)
+}
+
+// externalizeSecrets rewrites literal authorization values into secret:<key>
+// references, reusing an existing key when the same value is already stored.
+// env: references pass through untouched. The returned map is the full set of
+// key -> value secrets (existing plus any newly extracted).
+func externalizeSecrets(upstreams []Upstream, existing map[string]string) ([]Upstream, map[string]string, bool, error) {
+	values := make(map[string]string, len(existing))
+	valueToKey := make(map[string]string, len(existing))
+	for key, value := range existing {
+		values[key] = value
+		valueToKey[value] = key
+	}
+	changed := false
+	for i := range upstreams {
+		auth := upstreams[i].Authorization
+		if auth == nil || strings.EqualFold(strings.TrimSpace(auth.Type), "none") || strings.TrimSpace(auth.Value) == "" || strings.HasPrefix(auth.Value, "env:") {
+			continue
+		}
+		if strings.HasPrefix(auth.Value, "secret:") {
+			key := strings.TrimPrefix(auth.Value, "secret:")
+			if _, ok := values[key]; !ok {
+				// The referenced secret may live in the browser and simply not
+				// be injected yet; keep the reference and let the upstream show
+				// as locked until it is.
+				continue
+			}
+			continue
+		}
+		key, ok := valueToKey[auth.Value]
+		if !ok {
+			key = newSecretKey()
+			values[key] = auth.Value
+			valueToKey[auth.Value] = key
+		}
+		auth.Value = "secret:" + key
+		changed = true
+	}
+	return upstreams, values, changed, nil
+}
+
+// resolveAuthorization returns a copy of auth whose value has been resolved
+// through secrets/env, leaving the configured reference untouched. Secrets are
+// looked up lazily per key so requests that never need auth don't pay the cost
+// of copying the whole map.
+func resolveAuthorization(auth *Authorization, lookup func(string) (string, bool)) (*Authorization, error) {
+	if auth == nil {
+		return nil, nil
+	}
+	value, err := resolveAuthValueLazy(auth.Value, lookup)
+	if err != nil {
+		return nil, err
+	}
+	resolved := *auth
+	resolved.Value = value
+	return &resolved, nil
+}
+
+// secretValue reads a single secret value under the lock; used by the lazy
+// per-request resolution path.
+func (p *Proxy) secretValue(key string) (string, bool) {
+	p.Mu.RLock()
+	defer p.Mu.RUnlock()
+	value, ok := p.SecretValues[key]
+	return value, ok
 }
 
 func supportedHeaderOperator(operator string) bool {
@@ -888,7 +1001,22 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		serveConfigPage(w, r, appSelectors, debug)
 		return
 	}
+	if r.URL.Path == "/config/yaml" && r.Method == http.MethodGet {
+		p.serveConfigYAML(w)
+		return
+	}
+	if r.URL.Path == "/config/secrets" {
+		if r.Method != http.MethodPost {
+			http.Error(w, "/config/secrets is write-only", http.StatusMethodNotAllowed)
+			return
+		}
+		p.updateSecrets(w, r)
+		return
+	}
 	if r.URL.Path == "/config" && r.Method == http.MethodGet {
+		// Only secret:<key> references are rendered; each browser resolves the
+		// value from its own localStorage, so secrets injected by another
+		// browser are never exposed in this session.
 		serveConfigFragment(w, upstreams)
 		return
 	}
@@ -904,7 +1032,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.serveSessionPayload(w, r)
 		return
 	}
-	if r.URL.Path == "/config" && r.Method == http.MethodPut {
+	if (r.URL.Path == "/config" || r.URL.Path == "/config/yaml") && r.Method == http.MethodPut {
 		p.updateConfig(w, r)
 		return
 	}
@@ -953,7 +1081,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			session.setUpstream(upstreamLabel)
 			session.addEvent("attempt", upstreamLabel)
 		}
-		header, err := authorizationHeader(upstream.Authorization)
+		resolvedAuth, err := resolveAuthorization(upstream.Authorization, p.secretValue)
+		if err != nil {
+			lastErr = err
+			p.Logger.Error("upstream config error", "upstream", upstreamLabel, "error", err.Error())
+			if session != nil {
+				session.addEvent("config error", err.Error())
+			}
+			continue
+		}
+		header, err := authorizationHeader(resolvedAuth)
 		if err != nil {
 			lastErr = err
 			p.Logger.Error("upstream config error", "upstream", upstreamLabel, "error", err.Error())
@@ -1094,7 +1231,10 @@ func isManagementRequest(r *http.Request) bool {
 	if r.URL.Path == "/" && r.Method == http.MethodGet {
 		return true
 	}
-	if r.URL.Path == "/config" && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
+	if (r.URL.Path == "/config" || r.URL.Path == "/config/yaml") && (r.Method == http.MethodGet || r.Method == http.MethodPut) {
+		return true
+	}
+	if r.URL.Path == "/config/secrets" {
 		return true
 	}
 	return (r.URL.Path == "/logs" || r.URL.Path == "/sessions" || strings.HasPrefix(r.URL.Path, "/sessions/")) && r.Method == http.MethodGet
@@ -1143,7 +1283,7 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read config", http.StatusBadRequest)
 		return
 	}
-	settings, err := parseSettings(data)
+	settings, err := parseSettingsRaw(data)
 	if err != nil {
 		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 		return
@@ -1155,7 +1295,21 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 	if settings.AppSelectors == nil {
 		settings.AppSelectors = append([]AppSelector(nil), p.AppSelectors...)
 	}
+	existing := make(map[string]string, len(p.SecretValues))
+	for key, value := range p.SecretValues {
+		existing[key] = value
+	}
 	p.Mu.RUnlock()
+	upstreams, secretValues, _, err := externalizeSecrets(settings.Upstreams, existing)
+	if err != nil {
+		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	settings.Upstreams = upstreams
+	if err := validateSettings(&settings); err != nil {
+		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	encoded, err := yaml.Marshal(settings)
 	if err != nil {
 		http.Error(w, "failed to encode config", http.StatusInternalServerError)
@@ -1167,30 +1321,106 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 		p.Upstreams = settings.Upstreams
 		p.AppSelectors = settings.AppSelectors
 		p.Debug = settings.Debug
+		p.SecretValues = secretValues
 	}
 	p.Mu.Unlock()
 	if err != nil {
 		http.Error(w, "failed to save config: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Tell the browser which keys were newly assigned so it can persist the
+	// key -> value pairs locally. The values are the very ones the browser
+	// just submitted; this is not a secrets read-back API.
+	externalized := make(map[string]string)
+	for key, value := range secretValues {
+		if _, known := existing[key]; !known {
+			externalized[key] = value
+		}
+	}
 	w.Header().Set("HX-Trigger", "config-saved")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	_ = json.NewEncoder(w).Encode(map[string]any{"externalized": externalized})
+}
+
+// serveConfigYAML returns the current runtime configuration as YAML so the
+// admin UI can view and round-trip it. The values include upstream credentials;
+// this endpoint is part of the management surface and must sit behind the
+// management auth middleware.
+// serveConfigYAML returns the config in its on-disk form: authorization values
+// are secret:<key> references, never the resolved credentials. Merging with
+// the real secrets happens client-side from the browser's own storage.
+func (p *Proxy) serveConfigYAML(w http.ResponseWriter) {
+	p.Mu.RLock()
+	settings := Settings{Debug: p.Debug, AppSelectors: p.AppSelectors, Upstreams: p.Upstreams}
+	p.Mu.RUnlock()
+	data, err := yaml.Marshal(settings)
+	if err != nil {
+		http.Error(w, "failed to encode config", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-yaml; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(data)
+}
+
+// updateSecrets merges a submitted key -> value map (JSON or YAML) into the
+// in-memory secrets store. Submitted values may be b64:-encoded or plaintext
+// (legacy); the in-memory store always holds the decoded credentials. Nothing
+// is written to disk; the browser keeps them locally.
+func (p *Proxy) updateSecrets(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "failed to read secrets", http.StatusBadRequest)
+		return
+	}
+	var submitted map[string]string
+	if err := yaml.Unmarshal(data, &submitted); err != nil {
+		http.Error(w, "invalid secrets: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	decoded := make(map[string]string, len(submitted))
+	for key, value := range submitted {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		value, err := decodeSecretValue(value)
+		if err != nil {
+			http.Error(w, "invalid secrets: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		decoded[key] = value
+	}
+	p.Mu.Lock()
+	if p.SecretValues == nil {
+		p.SecretValues = make(map[string]string)
+	}
+	for key, value := range decoded {
+		p.SecretValues[key] = value
+	}
+	p.Mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func parseSettings(data []byte) (Settings, error) {
-	var legacy []Upstream
-	if err := yaml.Unmarshal(data, &legacy); err == nil {
-		settings := Settings{Upstreams: legacy}
-		if err := validateSettings(&settings); err != nil {
-			return Settings{}, err
-		}
-		return settings, nil
-	}
-	var settings Settings
-	if err := yaml.Unmarshal(data, &settings); err != nil {
+	settings, err := parseSettingsRaw(data)
+	if err != nil {
 		return Settings{}, err
 	}
 	if err := validateSettings(&settings); err != nil {
+		return Settings{}, err
+	}
+	return settings, nil
+}
+
+// parseSettingsRaw decodes config without validating, so callers that merge
+// runtime defaults (e.g. secrets kept server-side) can validate afterwards.
+func parseSettingsRaw(data []byte) (Settings, error) {
+	var legacy []Upstream
+	if err := yaml.Unmarshal(data, &legacy); err == nil {
+		return Settings{Upstreams: legacy}, nil
+	}
+	var settings Settings
+	if err := yaml.Unmarshal(data, &settings); err != nil {
 		return Settings{}, err
 	}
 	return settings, nil

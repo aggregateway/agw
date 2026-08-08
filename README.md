@@ -13,11 +13,44 @@ go run ./cmd/agw
 
 `-config` 默认为当前目录的 `config.yaml`。监听端口优先读取环境变量 `PORT`，未设置时默认为 `:8080`；也可以用 `-listen` 覆盖。`-timeout` 默认是 `0`，不会设置请求总超时，适合长时间的 SSE 流；需要限制时可以显式设置，例如 `-timeout 2m`。
 使用 `-debug` 可以在启动时开启 request header 日志；页面上的 `debug: true` toggle 可以在运行中切换并保存，无需重启。
+日志默认只进 `/logs` 实时流（保留最近 100 条），**不写入 stderr**，避免托管方从终端日志里看到敏感信息；需要同时输出到 stderr 时加 `-log-stderr`（或 `--log-stderr`）。
+
+公开托管时建议设置 `AGW_ADMIN_USER` 和 `AGW_ADMIN_PASSWORD`（两者必须同时设置）。设置后，配置页 `/`、`/config`、`/logs` 和 Session journal（`/sessions*`）这些管理路径需要 HTTP Basic Auth 才能访问，代理路径（`/v1/...`）保持开放；未设置时管理面不启用认证，保持原来的行为。凭据只从环境变量读取，不会写入或出现在配置页中。
+
+### Secrets（浏览器本地保存，服务端只存内存）
+
+凭据与配置分离，且**服务端不落盘、不可读回**：`config.yaml` 里不保存 token，`authorization.value` 只写自动生成的 `secret:<key>` 引用；真实值（key → value 映射）只保存在浏览器 `localStorage`，页面加载时通过只写的 `POST /config/secrets` 注入服务端内存，服务端没有任何读取 secrets 的接口：
+
+```yaml
+# config.yaml
+upstreams:
+  - url: https://api.openai.com/v1
+    authorization:
+      type: bearer
+      value: secret:3f9a1c2d4e5b6f7a8b9c0d1e2f3a4b5c
+```
+
+```yaml
+# 浏览器 localStorage 中的 secrets（键值对，key 由服务端随机生成）
+3f9a1c2d4e5b6f7a8b9c0d1e2f3a4b5c: sk-xxxxxxxx
+```
+
+行为说明：
+
+- **浏览器是唯一持久源**：localStorage 为空时直接空注入，凭据需通过"密钥"modal 从你自己的本地副本粘贴进来；服务端不会把 secrets 读回来给你。
+- **重启自动解锁**：服务端重启后内存清空，重新打开管理页面会自动用 localStorage 里的凭据解锁，无需重新输入。
+- **保存即外部化**：配置页/UI 编辑时看到的是由**当前浏览器**用自己 localStorage 解析出的真实值（密码框默认掩码）；保存时字面量自动生成 key 并只把 `secret:<key>` 写进 config.yaml，相同值复用同一个 key、改动值生成新 key。
+- **新 key 回传**：保存响应会把本次新生成 key→value 分配返回给浏览器（值就是你刚提交的那些），浏览器合并进 localStorage，保证重启后凭据不丢。
+- **跨浏览器隔离**：`/config` 片段只渲染 `secret:<key>` 引用，值完全由每个浏览器从自己的 localStorage 解析；其他浏览器注入到服务端的凭据不会在本会话中显示。
+- **未匹配显示锁定**：当前浏览器没有对应密钥的 upstream，authentication 栏只显示锁图标（引用保留在隐藏字段，不在页面明文展示）；该行整体只读、禁止删除，但可以 duplicate 后再编辑副本。
+- 密钥管理入口：顶栏"密钥"按钮可查看/粘贴 key→value 并保存到浏览器。
+- `authorization.value` 仍支持 `env:<VAR>` 直接引用环境变量（也是一种引用，config.yaml 里不含明文）。
+- `GET /config/yaml` 导出的是磁盘形态：只有 `secret:<key>` 引用，不含真实值；YAML modal 里的"合并显示"由浏览器用 localStorage 本地合并，服务端不出值。
 
 配置可以是旧版 upstream 数组，也可以是带 `appSelectors` 的对象。连接失败或上游返回 `502`、`503`、`504` 时会继续尝试下一个上游；其他响应会直接返回给客户端。
 上游配置中的 URL 只提供 scheme 和 host，客户端请求的原始 path 和 query 会原样传递给上游，不会做路径前缀拼接或改写。
-所有上游 `4xx/5xx` 响应都会记录到实时日志和 stderr，包含响应体内容；正常响应保持流式转发。
-代理向上游请求时使用 `Accept-Encoding: identity`，避免压缩错误 body 造成终端和实时日志乱码。
+所有上游 `4xx/5xx` 响应都会记录到 `/logs` 实时流，包含响应体内容；正常响应保持流式转发。
+代理向上游请求时使用 `Accept-Encoding: identity`，避免压缩错误 body 造成日志乱码。
 服务自动添加 CORS header，当前允许任意 Origin、method 和 header；浏览器的 CORS 预检请求会直接返回 `204`。
 
 ```yaml

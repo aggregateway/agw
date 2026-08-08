@@ -2,6 +2,7 @@ package agw
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -111,6 +112,38 @@ func recoverJSON(logger Logger, next http.Handler) http.Handler {
 			}
 		}()
 		next.ServeHTTP(tracker, r)
+	})
+}
+
+// requiresManagementAuth reports whether a request hits the admin surface
+// (config page, config API, logs, session journal). CORS preflight requests
+// stay open because browsers never attach credentials to them.
+func requiresManagementAuth(r *http.Request) bool {
+	if r.Method == http.MethodOptions {
+		return false
+	}
+	return isManagementRequest(r)
+}
+
+// basicAuth guards the management endpoints with HTTP Basic auth. It is
+// intentionally only applied to the admin surface; proxied API traffic passes
+// through untouched.
+func basicAuth(logger Logger, username, password string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !requiresManagementAuth(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		user, pass, ok := r.BasicAuth()
+		userOK := ok && subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1
+		passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
+		if !userOK || !passOK {
+			logger.Warn("management auth failed", "path", r.URL.Path)
+			w.Header().Set("WWW-Authenticate", `Basic realm="agw"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

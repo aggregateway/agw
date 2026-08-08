@@ -12,6 +12,7 @@ type configView struct {
 	URL              string
 	AuthType         string
 	AuthValue        string
+	AuthIsSecret     bool
 	AppSelectorsText string
 	HasAuth          bool
 }
@@ -59,6 +60,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .icon-button.save:hover { background: #b9d755; border-color: #b9d755; }
     .icon-button.danger { color: #9e3e3e; }
     .icon-button.danger:hover { color: #862f2f; background: #fff1f0; border-color: #e3aaa5; }
+    .icon-button:disabled { opacity: .38; cursor: not-allowed; }
+    .icon-button:disabled:hover { color: inherit; background: inherit; border-color: inherit; }
     .workspace { background: #fff; border: 1px solid #d7e0dc; border-top: 0; border-radius: 0 0 8px 8px; box-shadow: 0 12px 28px rgba(24, 44, 39, .06); }
     .selector-workspace { margin-top: 20px; border-top: 1px solid #d7e0dc; border-radius: 8px; }
     .workspace-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; border-bottom: 1px solid #e5ece9; }
@@ -92,7 +95,13 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .field-input, .auth-select { width: 100%; height: 34px; min-width: 0; padding: 6px 8px; color: #203330; background: transparent; border: 1px solid transparent; border-radius: 4px; }
     .field-input { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; }
     .field-input:hover, .auth-select:hover, .field-input:focus, .auth-select:focus { background: #fff; border-color: #b8c9c3; }
+    .field-input:disabled { color: #8aa09a; opacity: .62; cursor: not-allowed; background: transparent; border-color: transparent; }
     .auth { display: grid; grid-template-columns: 112px minmax(0, 1fr) 34px; gap: 7px; align-items: center; }
+    .auth-locked { display: inline-flex; grid-column: 3; justify-self: center; align-items: center; justify-content: center; width: 34px; height: 34px; color: #9a6b1b; background: #fdf6e8; border: 1px solid #ecd9a8; border-radius: 5px; }
+    .auth-locked svg { width: 14px; height: 14px; flex: none; }
+    tr[data-row].is-locked .field-input, tr[data-row].is-locked .auth-select, tr[data-row].is-locked .ms-trigger { color: #8aa09a; opacity: .62; cursor: not-allowed; }
+    tr[data-row].is-locked .ms-trigger:hover { background: transparent; border-color: transparent; }
+    :root[data-theme="dark"] tr[data-row].is-locked .field-input, :root[data-theme="dark"] tr[data-row].is-locked .auth-select, :root[data-theme="dark"] tr[data-row].is-locked .ms-trigger { color: #77908a; }
     .auth-select { color: #30564d; font-size: 13px; font-weight: 600; }
     .auth-value { min-width: 0; }
     .auth-value .field-input { width: 100%; }
@@ -229,6 +238,13 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .payload-modal-actions .icon-button:hover { color: #dceae5; background: rgba(255, 255, 255, .08); }
     .payload-modal-actions .icon-button.is-active { color: #cbe86b; }
     .payload-modal-body { flex: 1; min-height: 0; margin: 0; padding: 14px; overflow: auto; color: #cae0d8; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .config-modal-body { flex: 1; min-height: 0; margin: 0; padding: 12px; color: #cae0d8; background: #0f1b18; border: 0; border-radius: 0; outline: none; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre; overflow: auto; resize: none; }
+    .config-modal-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: #162a24; border-top: 1px solid #29423c; }
+    .config-modal-status { overflow: hidden; color: #8eaaa1; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .config-modal-status.is-error { color: #efa6a2; }
+    .config-modal-status.is-success { color: #cbe86b; }
+    .config-modal-toggle { display: inline-flex; align-items: center; gap: 6px; color: #8eaaa1; font-size: 11px; white-space: nowrap; cursor: pointer; }
+    .config-modal-toggle input { width: 14px; height: 14px; margin: 0; accent-color: #4d8f79; }
     body.has-modal { overflow: hidden; }
     .session-headers { padding-top: 12px; }
     .session-events { padding-top: 12px; }
@@ -347,6 +363,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         <span id="status" aria-live="polite"></span>
         <button class="icon-button" type="button" id="theme-toggle" title="切换到浅色主题" aria-label="切换到浅色主题"><i data-lucide="sun"></i></button>
         <button class="icon-button" type="button" title="刷新配置" aria-label="刷新配置" hx-get="/config" hx-target="#config-table" hx-swap="innerHTML"><i data-lucide="refresh-cw"></i></button>
+        <button class="icon-button" type="button" id="yaml-config" title="查看 / 导入 YAML" aria-label="查看 / 导入 YAML"><i data-lucide="file-code"></i></button>
+        <button class="icon-button" type="button" id="secrets-config" title="密钥管理（浏览器本地）" aria-label="密钥管理"><i data-lucide="key"></i></button>
         <button class="icon-button save" type="button" id="save" title="保存配置" aria-label="保存配置"><i data-lucide="save"></i></button>
       </div>
     </header>
@@ -379,6 +397,55 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><div class="log-toolbar"><span class="tab-connection" data-log-connection>SSE connected</span><button class="text-button" type="button" data-log-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i>pretty</button></div><pre id="log-stream"></pre></div>
     </section>
   </main>
+  <div class="payload-modal" data-payload-modal hidden role="dialog" aria-modal="true" aria-labelledby="payload-modal-title">
+    <div class="payload-modal-backdrop" data-payload-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="payload-modal-title" data-payload-modal-title>Intercepted response</h3>
+        <span class="payload-modal-meta" data-payload-modal-meta></span>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-payload-modal-full title="打开完整原文" aria-label="打开完整原文"><i data-lucide="file-text"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button>
+          <button class="icon-button" type="button" data-payload-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <pre class="payload-modal-body" data-payload-modal-body></pre>
+    </div>
+  </div>
+  <div class="payload-modal" data-config-modal hidden role="dialog" aria-modal="true" aria-labelledby="config-modal-title">
+    <div class="payload-modal-backdrop" data-config-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="config-modal-title">配置文件 (YAML)</h3>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-config-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <textarea class="config-modal-body" data-config-yaml spellcheck="false" wrap="off"></textarea>
+      <div class="config-modal-foot">
+        <span class="config-modal-status" data-config-yaml-status></span>
+        <label class="config-modal-toggle" title="合并后包含真实凭据，便于导出备份；取消则显示磁盘形态（仅 secret 引用）"><input type="checkbox" data-config-yaml-merged>合并显示</label>
+        <button class="text-button" type="button" data-config-yaml-import><i data-lucide="upload"></i>导入并保存</button>
+      </div>
+    </div>
+  </div>
+  <div class="payload-modal" data-secrets-modal hidden role="dialog" aria-modal="true" aria-labelledby="secrets-modal-title">
+    <div class="payload-modal-backdrop" data-secrets-modal-close></div>
+    <div class="payload-modal-box">
+      <div class="payload-modal-head">
+        <h3 id="secrets-modal-title">密钥 (浏览器本地)</h3>
+        <span class="payload-modal-actions">
+          <button class="icon-button" type="button" data-secrets-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
+        </span>
+      </div>
+      <textarea class="config-modal-body" data-secrets-yaml spellcheck="false" wrap="off" placeholder='{"key": "value"}'></textarea>
+      <div class="config-modal-foot">
+        <span class="config-modal-status" data-secrets-status></span>
+        <button class="text-button" type="button" data-secrets-save><i data-lucide="key"></i>保存到浏览器并解锁</button>
+      </div>
+    </div>
+  </div>
   <script>
     const table = document.getElementById('config-table');
     const selectorList = document.getElementById('selector-list');
@@ -443,6 +510,170 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     function closePayloadModal() {
       const modal = document.querySelector('[data-payload-modal]');
       modal.hidden = true;
+      document.body.classList.remove('has-modal');
+    }
+    const configModal = document.querySelector('[data-config-modal]');
+    const configYamlInput = document.querySelector('[data-config-yaml]');
+    const configYamlStatus = document.querySelector('[data-config-yaml-status]');
+    const configYamlImport = document.querySelector('[data-config-yaml-import]');
+    const configYamlMerged = document.querySelector('[data-config-yaml-merged]');
+    function decodeSecretValue(stored) {
+      if (stored.startsWith('b64:')) {
+        try { return atob(stored.slice(4)); } catch (_) {}
+      }
+      return stored;
+    }
+    function mergeConfigYaml(yamlText) {
+      const stored = localStorage.getItem(secretsStorageKey);
+      if (!stored) return yamlText;
+      let secrets = {};
+      try { secrets = JSON.parse(stored); } catch (_) { return yamlText; }
+      return yamlText.replace(/(value:\s*)secret:([A-Za-z0-9_-]+)/g, (match, prefix, key) => {
+        const raw = secrets[key];
+        if (raw === undefined) return match;
+        return prefix + JSON.stringify(decodeSecretValue(raw));
+      });
+    }
+    function loadConfigYaml() {
+      configYamlStatus.textContent = '加载中…';
+      configYamlStatus.className = 'config-modal-status';
+      return fetch('/config/yaml')
+        .then(response => { if (!response.ok) throw new Error('加载失败 (' + response.status + ')'); return response.text(); })
+        .then(text => { configYamlInput.value = configYamlMerged.checked ? mergeConfigYaml(text) : text; configYamlStatus.textContent = ''; })
+        .catch(error => { configYamlInput.value = ''; configYamlStatus.textContent = String(error); configYamlStatus.classList.add('is-error'); });
+    }
+    function openConfigModal() {
+      configYamlImport.disabled = false;
+      configModal.hidden = false;
+      document.body.classList.add('has-modal');
+      loadConfigYaml();
+    }
+    function closeConfigModal() {
+      configModal.hidden = true;
+      document.body.classList.remove('has-modal');
+      configYamlImport.disabled = false;
+    }
+    const secretsModal = document.querySelector('[data-secrets-modal]');
+    const secretsYamlInput = document.querySelector('[data-secrets-yaml]');
+    const secretsStatus = document.querySelector('[data-secrets-status]');
+    const secretsSave = document.querySelector('[data-secrets-save]');
+    const secretsStorageKey = 'agw-secrets';
+    function submitLocalSecrets() {
+      const stored = localStorage.getItem(secretsStorageKey);
+      if (!stored) return Promise.resolve();
+      return fetch('/config/secrets', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: stored}).catch(() => {});
+    }
+    function mergeExternalizedSecrets(pairs) {
+      let secrets = {};
+      try { secrets = JSON.parse(localStorage.getItem(secretsStorageKey) || '{}'); } catch (_) {}
+      Object.entries(pairs || {}).forEach(([key, value]) => { secrets[key] = 'b64:' + btoa(value); });
+      localStorage.setItem(secretsStorageKey, JSON.stringify(secrets));
+    }
+    // Resolve secret:<key> rows from this browser's own localStorage. The
+    // fragment only carries the reference; anything another browser injected
+    // into the server is never rendered here.
+    function lockRow(row) {
+      if (!row) return;
+      row.classList.add('is-locked');
+      row.querySelectorAll('[data-name], [data-url], [data-auth-type]').forEach(el => { el.disabled = true; });
+      const ms = row.querySelector('[data-multi-select]');
+      if (ms) {
+        const hidden = ms.querySelector('[data-app-selectors]');
+        if (hidden) hidden.disabled = true;
+        const trigger = ms.querySelector('[data-ms-trigger]');
+        if (trigger) trigger.classList.add('is-disabled');
+      }
+      const del = row.querySelector('[data-delete-row]');
+      if (del) { del.disabled = true; del.title = '凭据缺失，禁止删除'; }
+    }
+    function unlockRow(row) {
+      if (!row) return;
+      row.classList.remove('is-locked');
+      row.querySelectorAll('[data-name], [data-url], [data-auth-type], [data-app-selectors]').forEach(el => { el.disabled = false; });
+      const trigger = row.querySelector('[data-ms-trigger]');
+      if (trigger) trigger.classList.remove('is-disabled');
+      const del = row.querySelector('[data-delete-row]');
+      if (del) { del.disabled = false; del.title = '删除上游'; }
+    }
+    // A duplicate of a locked row must come back editable: drop the lock,
+    // re-enable every field and start with an empty credential input. The
+    // secret reference itself is never copied.
+    function makeDuplicateEditable(clone) {
+      const wasLocked = clone.classList.contains('is-locked') || !!clone.querySelector('.auth-locked');
+      if (!wasLocked) return;
+      clone.classList.remove('is-locked');
+      clone.querySelectorAll('[data-name], [data-url], [data-auth-type], [data-app-selectors]').forEach(el => { el.disabled = false; });
+      const trigger = clone.querySelector('[data-ms-trigger]');
+      if (trigger) trigger.classList.remove('is-disabled');
+      const del = clone.querySelector('[data-delete-row]');
+      if (del) { del.disabled = false; del.title = '删除上游'; }
+      const auth = clone.querySelector('.auth');
+      if (!auth) return;
+      auth.querySelectorAll('.auth-value, .auth-locked, input[data-auth-value]').forEach(el => el.remove());
+      const valueCell = document.createElement('span');
+      valueCell.className = 'auth-value';
+      const input = document.createElement('input');
+      input.className = 'field-input';
+      input.type = 'password';
+      input.value = '';
+      input.setAttribute('data-auth-value', '');
+      input.setAttribute('aria-label', '认证值');
+      valueCell.append(input);
+      const eye = document.createElement('button');
+      eye.className = 'icon-button';
+      eye.type = 'button';
+      eye.setAttribute('data-toggle-password', '');
+      eye.title = '显示认证值';
+      eye.setAttribute('aria-label', '显示认证值');
+      eye.innerHTML = '<i data-lucide="eye"></i>';
+      auth.append(valueCell, eye);
+    }
+    function applyLocalSecrets(scope) {
+      if (!scope) scope = document;
+      let secrets = {};
+      try { secrets = JSON.parse(localStorage.getItem(secretsStorageKey) || '{}'); } catch (_) {}
+      scope.querySelectorAll('[data-secret-key]').forEach(holder => {
+        const key = (holder.dataset.secretKey || '').replace(/^secret:/, '');
+        const raw = secrets[key];
+        const row = holder.closest('tr[data-row]');
+        if (raw === undefined) { lockRow(row); return; }
+        unlockRow(row);
+        const cell = holder.closest('.auth');
+        if (!cell) return;
+        cell.querySelectorAll('.auth-value, .auth-locked, input[data-auth-value][type="hidden"]').forEach(el => el.remove());
+        const valueCell = document.createElement('span');
+        valueCell.className = 'auth-value';
+        const input = document.createElement('input');
+        input.className = 'field-input';
+        input.type = 'password';
+        input.value = decodeSecretValue(raw);
+        input.setAttribute('data-auth-value', '');
+        input.setAttribute('aria-label', '认证值');
+        valueCell.append(input);
+        cell.append(valueCell);
+        if (!cell.querySelector('[data-toggle-password]')) {
+          const button = document.createElement('button');
+          button.className = 'icon-button';
+          button.type = 'button';
+          button.setAttribute('data-toggle-password', '');
+          button.title = '显示认证值';
+          button.setAttribute('aria-label', '显示认证值');
+          button.innerHTML = '<i data-lucide="eye"></i>';
+          cell.append(button);
+          renderIcons(button);
+        }
+      });
+    }
+    function openSecretsModal() {
+      secretsStatus.textContent = '';
+      secretsStatus.className = 'config-modal-status';
+      secretsModal.hidden = false;
+      document.body.classList.add('has-modal');
+      const stored = localStorage.getItem(secretsStorageKey) || '{}';
+      try { secretsYamlInput.value = JSON.stringify(JSON.parse(stored), null, 2); } catch (_) { secretsYamlInput.value = stored; }
+    }
+    function closeSecretsModal() {
+      secretsModal.hidden = true;
       document.body.classList.remove('has-modal');
     }
     function setSessionExpanded(card, expanded) {
@@ -723,29 +954,65 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       try {
         const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: document.getElementById('debug-toggle').checked, appSelectors, upstreams})});
         if (!response.ok) throw new Error(await response.text());
+        const result = await response.json().catch(() => null);
+        if (result && result.externalized) mergeExternalizedSecrets(result.externalized);
         status.className = 'success'; status.textContent = '已保存'; htmx.trigger(table, 'load');
       } catch (error) { status.className = 'error'; status.textContent = error.message || '保存失败'; }
       finally { saveButton.disabled = false; }
     });
     document.getElementById('add-upstream').addEventListener('click', function () { table.insertAdjacentHTML('beforeend', newRow()); ensureDuplicateButtons(table); renderMultiSelect(table); renderIcons(table); updateSummary(); });
     document.getElementById('add-selector').addEventListener('click', function () { const empty = selectorList.querySelector('.selector-empty'); if (empty) empty.remove(); selectorList.insertAdjacentHTML('beforeend', selectorRow()); ensureDuplicateButtons(selectorList); renderIcons(selectorList); updateSelectorSummary(); renderMultiSelect(document); });
+    document.getElementById('yaml-config').addEventListener('click', openConfigModal);
+    configYamlMerged.addEventListener('change', loadConfigYaml);
+    document.getElementById('secrets-config').addEventListener('click', openSecretsModal);
+    secretsSave.addEventListener('click', function () {
+      let parsed;
+      try {
+        parsed = JSON.parse(secretsYamlInput.value || '{}');
+      } catch (error) {
+        secretsStatus.textContent = '无效 JSON: ' + error.message;
+        secretsStatus.className = 'config-modal-status is-error';
+        return;
+      }
+      const text = JSON.stringify(parsed, null, 2);
+      secretsYamlInput.value = text;
+      secretsSave.disabled = true;
+      secretsStatus.textContent = '保存中…';
+      secretsStatus.className = 'config-modal-status';
+      fetch('/config/secrets', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: text})
+        .then(response => { if (!response.ok) return response.text().then(body => { throw new Error(body); }); })
+        .then(() => { localStorage.setItem(secretsStorageKey, text); applyLocalSecrets(table); secretsStatus.textContent = '已保存到浏览器并解锁'; secretsStatus.classList.add('is-success'); })
+        .catch(error => { secretsStatus.textContent = String(error.message || error); secretsStatus.classList.add('is-error'); })
+        .finally(() => { secretsSave.disabled = false; });
+    });
+    configYamlImport.addEventListener('click', function () {
+      configYamlImport.disabled = true;
+      configYamlStatus.textContent = '保存中…';
+      configYamlStatus.className = 'config-modal-status';
+      fetch('/config', {method: 'PUT', headers: {'Content-Type': 'text/yaml'}, body: configYamlInput.value})
+        .then(response => { if (!response.ok) return response.text().then(text => { throw new Error(text); }); return response.json(); })
+        .then(result => { if (result && result.externalized) mergeExternalizedSecrets(result.externalized); configYamlStatus.textContent = '已保存，刷新中…'; configYamlStatus.classList.add('is-success'); setTimeout(() => location.reload(), 400); })
+        .catch(error => { configYamlStatus.textContent = String(error.message || error); configYamlStatus.classList.add('is-error'); configYamlImport.disabled = false; });
+    });
     themeToggle.addEventListener('click', function () { setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); });
     document.addEventListener('click', function (event) {
       const removeChip = event.target.closest('[data-ms-remove]');
-      if (removeChip) { const ms = removeChip.closest('[data-multi-select]'); const chipName = removeChip.closest('[data-ms-chip]').dataset.msChip; setMultiSelectValue(ms, parseSelectorList(ms.querySelector('[data-app-selectors]').value).filter(name => name !== chipName)); return; }
+      if (removeChip) { const row = removeChip.closest('tr[data-row]'); if (row && row.classList.contains('is-locked')) return; const ms = removeChip.closest('[data-multi-select]'); const chipName = removeChip.closest('[data-ms-chip]').dataset.msChip; setMultiSelectValue(ms, parseSelectorList(ms.querySelector('[data-app-selectors]').value).filter(name => name !== chipName)); return; }
       const trigger = event.target.closest('[data-ms-trigger]');
-      if (trigger) { const ms = trigger.closest('[data-multi-select]'); const menu = ms.querySelector('[data-ms-menu]'); if (menu.hidden) openMultiSelect(ms); else closeMultiSelects(); return; }
+      if (trigger) { const row = trigger.closest('tr[data-row]'); if (row && row.classList.contains('is-locked')) return; const ms = trigger.closest('[data-multi-select]'); const menu = ms.querySelector('[data-ms-menu]'); if (menu.hidden) openMultiSelect(ms); else closeMultiSelects(); return; }
       if (!event.target.closest('[data-ms-menu]')) closeMultiSelects();
     });
     document.addEventListener('change', function (event) {
       const check = event.target.closest('[data-ms-check]');
-      if (check) { const ms = check.closest('[data-multi-select]'); const value = check.value; const names = new Set(parseSelectorList(ms.querySelector('[data-app-selectors]').value)); check.checked ? names.add(value) : names.delete(value); setMultiSelectValue(ms, [...names]); const next = [...ms.querySelectorAll('[data-ms-check]')].find(el => el.value === value); if (next) next.focus(); return; }
+      if (check) { const row = check.closest('tr[data-row]'); if (row && row.classList.contains('is-locked')) return; const ms = check.closest('[data-multi-select]'); const value = check.value; const names = new Set(parseSelectorList(ms.querySelector('[data-app-selectors]').value)); check.checked ? names.add(value) : names.delete(value); setMultiSelectValue(ms, [...names]); const next = [...ms.querySelectorAll('[data-ms-check]')].find(el => el.value === value); if (next) next.focus(); return; }
       if (event.target.closest('[data-selector-name]')) renderMultiSelect(document);
     });
     document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape') { closeMultiSelects(); document.querySelectorAll('[data-rule-menu]').forEach(menu => menu.hidden = true); closePayloadModal(); return; }
+      if (event.key === 'Escape') { closeMultiSelects(); document.querySelectorAll('[data-rule-menu]').forEach(menu => menu.hidden = true); closePayloadModal(); closeConfigModal(); closeSecretsModal(); return; }
       const trigger = event.target.closest('[data-ms-trigger]');
       if (!trigger) return;
+      const row = trigger.closest('tr[data-row]');
+      if (row && row.classList.contains('is-locked')) return;
       if (['Enter', ' ', 'ArrowDown'].includes(event.key)) {
         event.preventDefault();
         const ms = trigger.closest('[data-multi-select]');
@@ -766,7 +1033,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       const remove = event.target.closest('[data-delete-row]');
       if (remove) { remove.closest('tr[data-row]').remove(); updateSummary(); }
       const duplicateRow = event.target.closest('[data-duplicate-row]');
-      if (duplicateRow) { const row = duplicateRow.closest('tr[data-row]'); const clone = row.cloneNode(true); row.after(clone); ensureDuplicateButtons(clone); renderMultiSelect(clone); renderIcons(clone); updateSummary(); return; }
+      if (duplicateRow) { const row = duplicateRow.closest('tr[data-row]'); const clone = row.cloneNode(true); row.after(clone); makeDuplicateEditable(clone); ensureDuplicateButtons(clone); renderMultiSelect(clone); renderIcons(clone); updateSummary(); return; }
       const addRule = event.target.closest('[data-add-rule]');
       if (addRule) { const menu = addRule.closest('[data-selector-rules]').querySelector('[data-rule-menu]'); menu.hidden = !menu.hidden; return; }
       const ruleOption = event.target.closest('[data-rule-type-option]');
@@ -814,6 +1081,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       }
       const modalClose = event.target.closest('[data-payload-modal-close], [data-payload-modal-backdrop]');
       if (modalClose) { closePayloadModal(); return; }
+      const configClose = event.target.closest('[data-config-modal-close], [data-config-modal-backdrop]');
+      if (configClose) { closeConfigModal(); return; }
+      const secretsClose = event.target.closest('[data-secrets-modal-close], [data-secrets-modal-backdrop]');
+      if (secretsClose) { closeSecretsModal(); return; }
     });
     document.addEventListener('keydown', function (event) {
       const current = event.target.closest('[data-telemetry-tab]');
@@ -825,7 +1096,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       if (event.key === 'End') next = tabs.length - 1;
       event.preventDefault(); setTelemetryView(tabs[next].dataset.telemetryTab, true);
     });
-    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderMultiSelect(table); renderIcons(table); updateSummary(); } });
+    document.body.addEventListener('htmx:afterSwap', function (event) { if (event.target === table) { ensureDuplicateButtons(table); renderMultiSelect(table); applyLocalSecrets(table); renderIcons(table); updateSummary(); } });
     const logStream = document.getElementById('log-stream');
     const logPretty = document.querySelector('[data-log-pretty]');
     const logConnection = document.querySelector('[data-log-connection]');
@@ -872,28 +1143,15 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       }, 80);
     });
     setTheme(document.documentElement.dataset.theme || 'dark');
-    updateSelectorSummary(); ensureDuplicateButtons(document); renderMultiSelect(document); renderIcons(document);
+    updateSelectorSummary(); ensureDuplicateButtons(document); renderMultiSelect(document); applyLocalSecrets(table); renderIcons(document);
+    // Unlock the gateway from the browser's own secrets (write-only injection);
+    // the server never reads secrets back to us.
+    submitLocalSecrets();
   </script>
-  <div class="payload-modal" data-payload-modal hidden role="dialog" aria-modal="true" aria-labelledby="payload-modal-title">
-    <div class="payload-modal-backdrop" data-payload-modal-close></div>
-    <div class="payload-modal-box">
-      <div class="payload-modal-head">
-        <h3 id="payload-modal-title" data-payload-modal-title>Intercepted response</h3>
-        <span class="payload-modal-meta" data-payload-modal-meta></span>
-        <span class="payload-modal-actions">
-          <button class="icon-button" type="button" data-payload-modal-full title="打开完整原文" aria-label="打开完整原文"><i data-lucide="file-text"></i></button>
-          <button class="icon-button" type="button" data-payload-modal-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button>
-          <button class="icon-button" type="button" data-payload-modal-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button>
-          <button class="icon-button" type="button" data-payload-modal-close title="关闭" aria-label="关闭"><i data-lucide="x"></i></button>
-        </span>
-      </div>
-      <pre class="payload-modal-body" data-payload-modal-body></pre>
-    </div>
-  </div>
 </body>
 </html>`))
 
-var fragmentTemplate = template.Must(template.New("fragment").Parse(`{{range .}}<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="{{.Name}}" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="{{.URL}}" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none"{{if eq .AuthType "none"}} selected{{end}}>none</option><option value="basic"{{if eq .AuthType "basic"}} selected{{end}}>basic</option><option value="bearer"{{if eq .AuthType "bearer"}} selected{{end}}>bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="{{.AuthValue}}" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="app-selectors"><div class="multi-select" data-multi-select><input type="hidden" data-app-selectors value="{{.AppSelectorsText}}"><div class="ms-trigger" data-ms-trigger role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="兼容的 AppSelector"><span class="ms-chips" data-ms-chips></span><i data-lucide="chevron-down" class="ms-chevron"></i></div><div class="ms-menu" data-ms-menu hidden role="listbox" aria-multiselectable="true"></div></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>{{else}}<tr><td colspan="6">没有配置上游</td></tr>{{end}}`))
+var fragmentTemplate = template.Must(template.New("fragment").Parse(`{{range .}}<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="{{.Name}}" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="{{.URL}}" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none"{{if eq .AuthType "none"}} selected{{end}}>none</option><option value="basic"{{if eq .AuthType "basic"}} selected{{end}}>basic</option><option value="bearer"{{if eq .AuthType "bearer"}} selected{{end}}>bearer</option></select>{{if .AuthIsSecret}}<span class="auth-value"><input class="field-input auth-placeholder" type="password" value="••••••" aria-label="认证值（锁定）" disabled></span><span class="auth-locked" data-secret-key="{{.AuthValue}}" title="当前浏览器未持有该密钥，已锁定"><i data-lucide="lock"></i></span><input type="hidden" data-auth-value value="{{.AuthValue}}">{{else if eq .AuthType "none"}}<input type="hidden" data-auth-value value="">{{else}}<span class="auth-value"><input class="field-input" data-auth-value type="password" value="{{.AuthValue}}" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button>{{end}}</div></td><td class="app-selectors"><div class="multi-select" data-multi-select><input type="hidden" data-app-selectors value="{{.AppSelectorsText}}"><div class="ms-trigger" data-ms-trigger role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="兼容的 AppSelector"><span class="ms-chips" data-ms-chips></span><i data-lucide="chevron-down" class="ms-chevron"></i></div><div class="ms-menu" data-ms-menu hidden role="listbox" aria-multiselectable="true"></div></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>{{else}}<tr><td colspan="6">没有配置上游</td></tr>{{end}}`))
 
 func configViews(upstreams []Upstream) []configView {
 	views := make([]configView, 0, len(upstreams))
@@ -902,7 +1160,17 @@ func configViews(upstreams []Upstream) []configView {
 		if upstream.Authorization != nil {
 			view.HasAuth = true
 			view.AuthType = upstream.Authorization.Type
-			view.AuthValue = upstream.Authorization.Value
+			// secret:<key> references are resolved by the browser from its own
+			// localStorage, never from shared server memory, so credentials
+			// injected by another browser are not exposed here.
+			if strings.HasPrefix(upstream.Authorization.Value, "secret:") {
+				view.AuthIsSecret = true
+				view.AuthValue = upstream.Authorization.Value
+			} else if resolved, err := resolveAuthValue(upstream.Authorization.Value, nil); err == nil {
+				view.AuthValue = resolved
+			} else {
+				view.AuthValue = upstream.Authorization.Value
+			}
 		}
 		views = append(views, view)
 	}
