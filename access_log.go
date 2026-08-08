@@ -56,7 +56,7 @@ func requestLogger(logger Logger, next http.Handler) http.Handler {
 			r = r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, session))
 		}
 		if loggerProxyDebug(next) {
-			logger.Printf("| REQUEST | HEADERS | %s", formatHeaders(r.Header))
+			logger.Info(fmt.Sprintf("| REQUEST | HEADERS | %s", formatHeaders(r.Header)))
 		}
 		writer := &accessWriter{ResponseWriter: w}
 		if session != nil {
@@ -70,7 +70,13 @@ func requestLogger(logger Logger, next http.Handler) http.Handler {
 		if session != nil {
 			session.complete(status, writer.bytes, r.Context().Err())
 		}
-		logger.Printf("| %3d | %13v | %15s | %-7s %s | %dB", status, time.Since(started), clientIP(r), r.Method, r.URL.RequestURI(), writer.bytes)
+		logger.Info(fmt.Sprintf("| %3d | %13v | %15s | %-7s %s | %dB", status, time.Since(started), clientIP(r), r.Method, r.URL.RequestURI(), writer.bytes),
+			"status", status,
+			"duration", time.Since(started).String(),
+			"ip", clientIP(r),
+			"method", r.Method,
+			"path", r.URL.RequestURI(),
+			"bytes", writer.bytes)
 	})
 }
 
@@ -119,5 +125,7 @@ func clientIP(r *http.Request) string {
 }
 
 type Logger interface {
-	Printf(format string, args ...any)
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
 }

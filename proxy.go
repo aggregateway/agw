@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -109,7 +108,7 @@ type Settings struct {
 type Proxy struct {
 	Upstreams    []Upstream
 	Client       *http.Client
-	Logger       *log.Logger
+	Logger       Logger
 	Config       string
 	LogHub       *logHub
 	Sessions     *sessionHub
@@ -804,7 +803,7 @@ func parseRewriteValue(value string) any {
 	return value
 }
 
-func applySelectorRewrites(body []byte, selectors []AppSelector, selected string, logger *log.Logger, session *trackedSession) []byte {
+func applySelectorRewrites(body []byte, selectors []AppSelector, selected string, logger Logger, session *trackedSession) []byte {
 	for _, selector := range selectors {
 		if selector.Name != selected || len(selector.Rewrite) == 0 {
 			continue
@@ -815,7 +814,7 @@ func applySelectorRewrites(body []byte, selectors []AppSelector, selected string
 		}
 		for _, rewrite := range selector.Rewrite {
 			detail := rewrite.Field + " -> " + rewrite.Value
-			logger.Printf("| REWRITE | %s", detail)
+			logger.Info(fmt.Sprintf("| REWRITE | %s", detail), "rewrite", detail)
 			if session != nil {
 				session.addEvent("rewrite", detail)
 			}
@@ -924,7 +923,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.URL.Path, r.URL.Query(), r.Header, body)
 	if routeErr != nil {
-		p.Logger.Printf("| ROUTER | NO_MATCH | %v", routeErr)
+		p.Logger.Info(fmt.Sprintf("| ROUTER | NO_MATCH | %v", routeErr), "error", routeErr.Error())
 		if session != nil {
 			session.setRequestBody(r.Header.Get("Content-Type"), body)
 			session.setAppSelector(appSelector)
@@ -934,7 +933,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if appSelector != "" {
-		p.Logger.Printf("| ROUTER | MATCH | appSelector=%s | upstreams=%d", appSelector, len(routedUpstreams))
+		p.Logger.Info(fmt.Sprintf("| ROUTER | MATCH | appSelector=%s | upstreams=%d", appSelector, len(routedUpstreams)), "appSelector", appSelector, "upstreams", len(routedUpstreams))
 		if session != nil {
 			session.setAppSelector(appSelector)
 			session.addEvent("route", "appSelector="+appSelector)
@@ -950,7 +949,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for attempt, candidate := range routedUpstreams {
 		upstream := candidate.Upstream
 		upstreamLabel := upstreamID(candidate.Index, upstream)
-		p.Logger.Printf("| %s | ATTEMPT | %s %s", upstreamLabel, r.Method, r.URL.RequestURI())
+		p.Logger.Info(fmt.Sprintf("| %s | ATTEMPT | %s %s", upstreamLabel, r.Method, r.URL.RequestURI()), "upstream", upstreamLabel, "method", r.Method, "path", r.URL.RequestURI())
 		if session != nil {
 			session.setUpstream(upstreamLabel)
 			session.addEvent("attempt", upstreamLabel)
@@ -958,7 +957,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		header, err := authorizationHeader(upstream.Authorization)
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("| %s | CONFIG_ERROR | %v", upstreamLabel, err)
+			p.Logger.Error(fmt.Sprintf("| %s | CONFIG_ERROR | %v", upstreamLabel, err), "upstream", upstreamLabel, "error", err.Error())
 			if session != nil {
 				session.addEvent("config error", err.Error())
 			}
@@ -967,7 +966,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		target, err := upstreamRequestURL(upstream.URL, r.URL.RequestURI())
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("| %s | TARGET_ERROR | %v", upstreamLabel, err)
+			p.Logger.Error(fmt.Sprintf("| %s | TARGET_ERROR | %v", upstreamLabel, err), "upstream", upstreamLabel, "error", err.Error())
 			if session != nil {
 				session.addEvent("target error", err.Error())
 			}
@@ -976,7 +975,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("| %s | REQUEST_ERROR | %v", upstreamLabel, err)
+			p.Logger.Error(fmt.Sprintf("| %s | REQUEST_ERROR | %v", upstreamLabel, err), "upstream", upstreamLabel, "error", err.Error())
 			if session != nil {
 				session.addEvent("request error", err.Error())
 			}
@@ -997,7 +996,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		resp, err := p.Client.Do(req)
 		if err != nil {
 			lastErr = err
-			p.Logger.Printf("| %s | TRANSPORT_ERROR | %v", upstreamLabel, err)
+			p.Logger.Error(fmt.Sprintf("| %s | TRANSPORT_ERROR | %v", upstreamLabel, err), "upstream", upstreamLabel, "error", err.Error())
 			if session != nil {
 				session.addEvent("transport error", err.Error())
 			}
@@ -1009,13 +1008,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if readErr != nil {
 				lastErr = readErr
 			}
-			p.Logger.Printf("| %s | RESPONSE | %s | %s %s | %s", upstreamLabel, resp.Status, r.Method, target, strings.TrimSpace(string(errorBody)))
+			p.Logger.Info(fmt.Sprintf("| %s | RESPONSE | %s | %s %s | %s", upstreamLabel, resp.Status, r.Method, target, strings.TrimSpace(string(errorBody))), "upstream", upstreamLabel, "status", resp.Status, "path", target)
 			if session != nil {
 				session.addEvent("response", upstreamLabel+" · "+resp.Status)
 			}
 			if retryableStatus(resp.StatusCode) && attempt < len(routedUpstreams)-1 {
 				next := routedUpstreams[attempt+1]
-				p.Logger.Printf("| %s | RETRY | next=%s", upstreamLabel, upstreamID(next.Index, next.Upstream))
+				p.Logger.Warn(fmt.Sprintf("| %s | RETRY | next=%s", upstreamLabel, upstreamID(next.Index, next.Upstream)), "upstream", upstreamLabel, "next", upstreamID(next.Index, next.Upstream))
 				if session != nil {
 					session.addEvent("retry", "next="+upstreamID(next.Index, next.Upstream))
 				}
@@ -1030,7 +1029,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write(errorBody)
 			return
 		}
-		p.Logger.Printf("| %s | RESPONSE | %s | using response", upstreamLabel, resp.Status)
+		p.Logger.Info(fmt.Sprintf("| %s | RESPONSE | %s | using response", upstreamLabel, resp.Status), "upstream", upstreamLabel, "status", resp.Status)
 		if session != nil {
 			session.setContentType(resp.Header.Get("Content-Type"))
 			session.addEvent("response", upstreamLabel+" · "+resp.Status)
@@ -1042,7 +1041,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			responseWriter = io.MultiWriter(responseWriter, sessionResponseWriter{session: session})
 		}
 		if _, err := io.Copy(responseWriter, resp.Body); err != nil {
-			p.Logger.Printf("| %s | STREAM_ERROR | %v", upstreamLabel, err)
+			p.Logger.Error(fmt.Sprintf("| %s | STREAM_ERROR | %v", upstreamLabel, err), "upstream", upstreamLabel, "error", err.Error())
 			if session != nil {
 				session.addEvent("stream error", err.Error())
 			}
@@ -1054,7 +1053,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Context().Err() != nil {
 		return
 	}
-	p.Logger.Printf("| UPSTREAM | EXHAUSTED | last_error=%v", lastErr)
+	p.Logger.Error(fmt.Sprintf("| UPSTREAM | EXHAUSTED | last_error=%v", lastErr), "error", lastErr.Error())
 	if session != nil {
 		session.addEvent("exhausted", fmt.Sprint(lastErr))
 	}

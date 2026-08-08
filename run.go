@@ -3,8 +3,9 @@ package agw
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -42,19 +43,19 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
-	logger := log.New(os.Stderr, "[AGW] ", log.LstdFlags)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if invalidPort != "" {
-		logger.Printf("| SERVER | CONFIG_ERROR | invalid PORT %q, using %s", invalidPort, listenDefault)
+		logger.Error(fmt.Sprintf("| SERVER | CONFIG_ERROR | invalid PORT %q, using %s", invalidPort, listenDefault), "port", invalidPort)
 	}
 	hub := newLogHub()
 	sessions := newSessionHub()
 	defer sessions.close()
-	logger.SetOutput(io.MultiWriter(os.Stderr, hub))
+	logger = slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, hub), nil))
 	client := newHTTPClient(*timeout)
 	proxy := &Proxy{Upstreams: settings.Upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: configPath, LogHub: hub, Sessions: sessions, Debug: settings.Debug || *debug}
 
 	server := &http.Server{Addr: *listen, Handler: requestLogger(logger, proxy), ReadHeaderTimeout: 10 * time.Second}
-	logger.Printf("| SERVER | LISTEN | addr=%s upstreams=%d debug=%t", *listen, len(settings.Upstreams), proxy.Debug)
+	logger.Info(fmt.Sprintf("| SERVER | LISTEN | addr=%s upstreams=%d debug=%t", *listen, len(settings.Upstreams), proxy.Debug), "addr", *listen, "upstreams", len(settings.Upstreams), "debug", proxy.Debug)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
