@@ -450,6 +450,12 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       });
     }
     function summaryStructure(summary) { return [...summary.children].map(el => el.className).join('|'); }
+    function withScrollPreserved(node, fn) {
+      const scrollables = [...node.querySelectorAll('pre[data-session-payload], .header-list, .gateway-events')];
+      const positions = scrollables.map(el => el.scrollTop);
+      fn();
+      scrollables.forEach((el, i) => { el.scrollTop = positions[i]; });
+    }
     function updateSessionCard(oldCard, newCard) {
       const oldSummary = oldCard.querySelector('.session-summary');
       const newSummary = newCard.querySelector('.session-summary');
@@ -484,18 +490,29 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       const incoming = [...doc.querySelectorAll('.session-card')];
       const incomingIds = new Set(incoming.map(card => card.dataset.sessionId));
       const existingById = new Map([...sessionList.querySelectorAll('.session-card')].map(card => [card.dataset.sessionId, card]));
-      incoming.forEach(card => {
-        const oldCard = existingById.get(card.dataset.sessionId);
-        if (oldCard) updateSessionCard(oldCard, card);
-        else { sessionList.append(card); renderIcons(card); }
-      });
       // Moving a card node resets the scroll position of its scrollable
-      // children (e.g. the response preview), so only reorder when the
-      // sequence actually changed instead of shuffling every SSE batch.
-      const currentIds = [...sessionList.querySelectorAll('.session-card')].map(card => card.dataset.sessionId);
-      if (currentIds.join('\n') !== incoming.map(card => card.dataset.sessionId).join('\n')) {
-        incoming.forEach(card => { const oldCard = existingById.get(card.dataset.sessionId); if (oldCard) sessionList.append(oldCard); });
-      }
+      // children (e.g. the response preview), so only move cards that are
+      // actually out of order and insert new cards at their final slot.
+      const cards = [...sessionList.querySelectorAll('.session-card')];
+      incoming.forEach((card, index) => {
+        const oldCard = existingById.get(card.dataset.sessionId);
+        if (oldCard) {
+          updateSessionCard(oldCard, card);
+          const currentIndex = cards.indexOf(oldCard);
+          if (currentIndex === index) return;
+          let reference;
+          if (currentIndex > index) reference = index < cards.length ? cards[index] : null;
+          else reference = index + 1 < cards.length ? cards[index + 1] : null;
+          withScrollPreserved(oldCard, () => sessionList.insertBefore(oldCard, reference || null));
+          cards.splice(currentIndex, 1);
+          cards.splice(index, 0, oldCard);
+          return;
+        }
+        const reference = index < cards.length ? cards[index] : null;
+        sessionList.insertBefore(card, reference || null);
+        cards.splice(index, 0, card);
+        renderIcons(card);
+      });
       sessionList.querySelectorAll('.session-card').forEach(card => { if (!incomingIds.has(card.dataset.sessionId)) card.remove(); });
       const empty = sessionList.querySelector('.session-empty');
       if (incoming.length) { if (empty) empty.remove(); }
