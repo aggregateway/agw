@@ -23,9 +23,15 @@ func main() {
 func newRootCommand(opts *agw.Options, defaultAddr, invalidPort string, logger *slog.Logger) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "agw",
-		Short: "Configured HTTP reverse proxy for AI APIs",
-		Long: "agw routes API requests to configured upstreams with routing\n" +
-			"selectors, body rewriting and a management UI.",
+		Short: "Reverse proxy gateway for AI APIs",
+		Long: "agw routes API requests to configured upstreams using routing\n" +
+			"selectors, rewrites JSON bodies, and exposes a management UI for\n" +
+			"configuration, the live request feed and the session journal.\n\n" +
+			"Management endpoints (/, /config*, /logs, /sessions*) can be protected\n" +
+			"with --admin-user/--admin-password or the AGW_ADMIN_USER and\n" +
+			"AGW_ADMIN_PASSWORD environment variables.",
+		Example: "  agw --config config.yaml --listen :8080\n" +
+			"  AGW_ADMIN_USER=admin AGW_ADMIN_PASSWORD=secret agw",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if invalidPort != "" {
 				logger.Error("server config error", "port", invalidPort, "fallback", defaultAddr)
@@ -37,11 +43,13 @@ func newRootCommand(opts *agw.Options, defaultAddr, invalidPort string, logger *
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
 	flags := root.Flags()
-	flags.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "path to upstream config")
-	flags.StringVar(&opts.Listen, "listen", defaultAddr, "listen address (defaults to $PORT or :8080)")
-	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables the timeout")
-	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "allow client config (debug: true) to enable request header logging")
+	flags.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "path to the config file")
+	flags.StringVar(&opts.Listen, "listen", defaultAddr, "listen address ($PORT wins, else :8080)")
+	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables it")
+	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "honor debug: true from the client config and log request headers; without it debug stays off")
 	flags.BoolVar(&opts.LogStderr, "log-stderr", false, "also write logs to stderr (default: only the /logs feed)")
+	flags.StringVar(&opts.AdminUser, "admin-user", "", "Basic Auth username for the management UI (env: AGW_ADMIN_USER; must be paired with --admin-password)")
+	flags.StringVar(&opts.AdminPassword, "admin-password", "", "Basic Auth password for the management UI (env: AGW_ADMIN_PASSWORD)")
 	// Keep accepting single-dash long flags (-config) as the original CLI did;
 	// pflag would otherwise read them as shorthand clusters.
 	root.SetArgs(normalizeArgs(os.Args[1:]))
@@ -51,7 +59,7 @@ func newRootCommand(opts *agw.Options, defaultAddr, invalidPort string, logger *
 // normalizeArgs rewrites known long flags written with a single dash into
 // double-dash form so Go-style invocations like -config keep working.
 func normalizeArgs(args []string) []string {
-	longFlags := map[string]bool{"config": true, "listen": true, "timeout": true, "allow-debug": true, "log-stderr": true}
+	longFlags := map[string]bool{"config": true, "listen": true, "timeout": true, "allow-debug": true, "log-stderr": true, "admin-user": true, "admin-password": true}
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {

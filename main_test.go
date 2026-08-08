@@ -1063,6 +1063,42 @@ func TestUpdateConfigDebugRequiresAllowDebug(t *testing.T) {
 	}
 }
 
+func TestManagementCredentials(t *testing.T) {
+	user, password, err := managementCredentials(Options{})
+	if err != nil || user != "" || password != "" {
+		t.Fatalf("no credentials should resolve to empty: user=%q pass=%q err=%v", user, password, err)
+	}
+	// Half-configured credentials must error when there is no env fallback.
+	if _, _, err := managementCredentials(Options{AdminUser: "only-user"}); err == nil {
+		t.Fatal("half-configured credentials must error")
+	}
+	if _, _, err := managementCredentials(Options{AdminPassword: "only-pass"}); err == nil {
+		t.Fatal("half-configured credentials must error")
+	}
+	t.Setenv("AGW_ADMIN_USER", "env-user")
+	t.Setenv("AGW_ADMIN_PASSWORD", "env-pass")
+
+	user, password, err = managementCredentials(Options{AdminUser: "flag-user", AdminPassword: "flag-pass"})
+	if err != nil || user != "flag-user" || password != "flag-pass" {
+		t.Fatalf("flags must win over env: user=%q pass=%q err=%v", user, password, err)
+	}
+
+	user, password, err = managementCredentials(Options{})
+	if err != nil || user != "env-user" || password != "env-pass" {
+		t.Fatalf("env fallback failed: user=%q pass=%q err=%v", user, password, err)
+	}
+
+	// A single flag may fill in the missing env side.
+	user, password, err = managementCredentials(Options{AdminUser: "flag-user"})
+	if err != nil || user != "flag-user" || password != "env-pass" {
+		t.Fatalf("flag+env mix failed: user=%q pass=%q err=%v", user, password, err)
+	}
+	user, password, err = managementCredentials(Options{AdminPassword: "flag-pass"})
+	if err != nil || user != "env-user" || password != "flag-pass" {
+		t.Fatalf("env+flag mix failed: user=%q pass=%q err=%v", user, password, err)
+	}
+}
+
 func TestSessionHubTracksLifecycleAndRedactsHeaders(t *testing.T) {
 	hub := newSessionHub()
 	defer hub.close()

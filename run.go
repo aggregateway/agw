@@ -24,6 +24,11 @@ type Options struct {
 	// logging stays off no matter what the config file or the client says.
 	AllowDebug bool
 	LogStderr  bool
+	// AdminUser and AdminPassword enable HTTP Basic Auth on the management
+	// surface. They fall back to the AGW_ADMIN_USER / AGW_ADMIN_PASSWORD
+	// environment variables and must always be set together.
+	AdminUser     string
+	AdminPassword string
 }
 
 // DefaultListenAddress derives the listen address from PORT, falling back to
@@ -51,10 +56,9 @@ func RunWithOptions(opts Options) error {
 	if opts.Listen == "" {
 		opts.Listen = ":8080"
 	}
-	adminUser := os.Getenv("AGW_ADMIN_USER")
-	adminPassword := os.Getenv("AGW_ADMIN_PASSWORD")
-	if (adminUser == "") != (adminPassword == "") {
-		return errors.New("AGW_ADMIN_USER and AGW_ADMIN_PASSWORD must be set together")
+	adminUser, adminPassword, err := managementCredentials(opts)
+	if err != nil {
+		return err
 	}
 
 	settings, err := loadSettings(opts.ConfigPath)
@@ -119,9 +123,11 @@ func Run(args []string) error {
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "path to upstream config")
 	flags.StringVar(&opts.Listen, "listen", defaultAddr, "listen address")
-	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables the timeout")
-	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "allow client config (debug: true) to enable request header logging")
+	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables it")
+	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "honor debug: true from the client config and log request headers; without it debug stays off")
 	flags.BoolVar(&opts.LogStderr, "log-stderr", false, "also write logs to stderr")
+	flags.StringVar(&opts.AdminUser, "admin-user", "", "Basic Auth username for the management UI (env: AGW_ADMIN_USER; must be paired with --admin-password)")
+	flags.StringVar(&opts.AdminPassword, "admin-password", "", "Basic Auth password for the management UI (env: AGW_ADMIN_PASSWORD)")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			flags.SetOutput(os.Stdout)
@@ -134,6 +140,24 @@ func Run(args []string) error {
 		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("server config error", "port", invalidPort, "fallback", defaultAddr)
 	}
 	return RunWithOptions(opts)
+}
+
+// managementCredentials resolves the management Basic Auth pair from the
+// options first, falling back to the AGW_ADMIN_USER / AGW_ADMIN_PASSWORD
+// environment variables. Both must be set together.
+func managementCredentials(opts Options) (user, password string, err error) {
+	user = opts.AdminUser
+	if user == "" {
+		user = os.Getenv("AGW_ADMIN_USER")
+	}
+	password = opts.AdminPassword
+	if password == "" {
+		password = os.Getenv("AGW_ADMIN_PASSWORD")
+	}
+	if (user == "") != (password == "") {
+		return "", "", errors.New("AGW_ADMIN_USER and AGW_ADMIN_PASSWORD must be set together")
+	}
+	return user, password, nil
 }
 
 func newHTTPClient(timeout time.Duration) *http.Client {

@@ -15,7 +15,7 @@ go run ./cmd/agw
 使用 `--allow-debug` 允许 request header 日志生效：未设置时，即使 `config.yaml` 里写了 `debug: true`、或通过页面提交修改，运行时都保持关闭（页面也不会显示 Debug headers 开关）；设置后，配置里的 `debug: true` 才会在运行时生效，并可通过页面 toggle 切换保存。
 日志默认只进 `/logs` 实时流（保留最近 100 条），**不写入 stderr**，避免托管方从终端日志里看到敏感信息；需要同时输出到 stderr 时加 `-log-stderr`（或 `--log-stderr`）。
 
-公开托管时建议设置 `AGW_ADMIN_USER` 和 `AGW_ADMIN_PASSWORD`（两者必须同时设置）。设置后，配置页 `/`、`/config`、`/logs` 和 Session journal（`/sessions*`）这些管理路径需要 HTTP Basic Auth 才能访问，代理路径（`/v1/...`）保持开放；未设置时管理面不启用认证，保持原来的行为。凭据只从环境变量读取，不会写入或出现在配置页中。
+公开托管时建议设置管理面 Basic Auth：可通过 `--admin-user` / `--admin-password` 或环境变量 `AGW_ADMIN_USER` / `AGW_ADMIN_PASSWORD` 配置（两者必须同时设置，flag 优先于环境变量；密码建议走环境变量，避免出现在进程列表和历史记录里）。设置后，配置页 `/`、`/config`、`/logs` 和 Session journal（`/sessions*`）这些管理路径需要 HTTP Basic Auth 才能访问，代理路径（`/v1/...`）保持开放；未设置时管理面不启用认证，保持原来的行为。凭据不会写入配置或出现在配置页中。
 
 ### Secrets（浏览器本地保存，服务端只存内存）
 
