@@ -379,6 +379,26 @@ func TestApplyRewritesSetsAndCreatesFields(t *testing.T) {
 	}
 }
 
+func TestApplyRewritesPreservesKeyOrder(t *testing.T) {
+	body := []byte(`{"model":"deepseek","z":1,"a":{"b":2,"c":3},"m":[1,2]}`)
+	got := string(applyRewrites(body, []FieldRewrite{{Field: "model", Value: "gpt"}}))
+	if got != `{"model":"gpt","z":1,"a":{"b":2,"c":3},"m":[1,2]}` {
+		t.Fatalf("key order was not preserved: %s", got)
+	}
+
+	// A new key is appended at the end, not alphabetically inserted.
+	got = string(applyRewrites([]byte(`{"z":1,"a":2}`), []FieldRewrite{{Field: "model", Value: "gpt"}}))
+	if got != `{"z":1,"a":2,"model":"gpt"}` {
+		t.Fatalf("new key was not appended at the end: %s", got)
+	}
+
+	// Nested objects keep their order too, and intermediate objects are created.
+	got = string(applyRewrites([]byte(`{"z":{"y":1,"x":2}}`), []FieldRewrite{{Field: "z.n", Value: "three"}}))
+	if got != `{"z":{"y":1,"x":2,"n":"three"}}` {
+		t.Fatalf("nested key order was not preserved: %s", got)
+	}
+}
+
 func TestApplyRewritesLeavesNonObjectBodiesAlone(t *testing.T) {
 	rewrites := []FieldRewrite{{Field: "model", Value: "x"}}
 	if got := string(applyRewrites([]byte(`[{"model":"a"}]`), rewrites)); got != `[{"model":"a"}]` {

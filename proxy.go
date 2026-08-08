@@ -436,7 +436,8 @@ func scalarString(value any) string {
 // applyRewrites sets JSON body fields with jq-style setpath semantics:
 // intermediate objects are created when missing and typed values (numbers,
 // booleans, null, arrays, objects) keep their JSON type. Only object-rooted
-// JSON bodies are rewritten; everything else is returned unchanged.
+// JSON bodies are rewritten; everything else is returned unchanged. The
+// original key order of every object is preserved.
 func applyRewrites(body []byte, rewrites []FieldRewrite) []byte {
 	if len(rewrites) == 0 {
 		return body
@@ -445,23 +446,123 @@ func applyRewrites(body []byte, rewrites []FieldRewrite) []byte {
 	if len(trimmed) == 0 || trimmed[0] != '{' {
 		return body
 	}
-	decoder := json.NewDecoder(bytes.NewReader(trimmed))
-	decoder.UseNumber()
-	var doc map[string]any
-	if err := decoder.Decode(&doc); err != nil {
+	doc, err := parseOrderedJSON(trimmed)
+	if err != nil {
+		return body
+	}
+	root, ok := doc.(*orderedObject)
+	if !ok {
 		return body
 	}
 	for _, rewrite := range rewrites {
-		setJSONPath(doc, rewrite.Field, parseRewriteValue(rewrite.Value))
+		setJSONPath(root, rewrite.Field, parseRewriteValue(rewrite.Value))
 	}
-	encoded, err := json.Marshal(doc)
+	encoded, err := json.Marshal(root)
 	if err != nil {
 		return body
 	}
 	return encoded
 }
 
-func setJSONPath(root map[string]any, field string, value any) {
+// orderedObject keeps object keys in their original JSON order while still
+// allowing fast lookup by key.
+type orderedObject struct {
+	keys   []string
+	values map[string]any
+}
+
+func (o *orderedObject) set(key string, value any) {
+	if o.values == nil {
+		o.values = make(map[string]any)
+	}
+	if _, exists := o.values[key]; !exists {
+		o.keys = append(o.keys, key)
+	}
+	o.values[key] = value
+}
+
+func (o *orderedObject) MarshalJSON() ([]byte, error) {
+	var output bytes.Buffer
+	output.WriteByte('{')
+	for i, key := range o.keys {
+		if i > 0 {
+			output.WriteByte(',')
+		}
+		encodedKey, err := json.Marshal(key)
+		if err != nil {
+			return nil, err
+		}
+		output.Write(encodedKey)
+		output.WriteByte(':')
+		encodedValue, err := json.Marshal(o.values[key])
+		if err != nil {
+			return nil, err
+		}
+		output.Write(encodedValue)
+	}
+	output.WriteByte('}')
+	return output.Bytes(), nil
+}
+
+// parseOrderedJSON decodes JSON into a tree of orderedObject / []any / scalar
+// nodes, preserving the key order of every object. Numbers keep their original
+// literal via json.Number.
+func parseOrderedJSON(data []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	return decodeJSONValue(decoder)
+}
+
+func decodeJSONValue(decoder *json.Decoder) (any, error) {
+	token, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, isDelim := token.(json.Delim)
+	if !isDelim {
+		return token, nil
+	}
+	switch delim {
+	case '{':
+		object := &orderedObject{values: make(map[string]any)}
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return nil, errors.New("object key is not a string")
+			}
+			value, err := decodeJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			object.set(key, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return object, nil
+	case '[':
+		array := []any{}
+		for decoder.More() {
+			value, err := decodeJSONValue(decoder)
+			if err != nil {
+				return nil, err
+			}
+			array = append(array, value)
+		}
+		if _, err := decoder.Token(); err != nil {
+			return nil, err
+		}
+		return array, nil
+	default:
+		return nil, errors.New("unexpected JSON delimiter")
+	}
+}
+
+func setJSONPath(root *orderedObject, field string, value any) {
 	parts := strings.Split(field, ".")
 	if len(parts) == 0 {
 		return
@@ -472,16 +573,16 @@ func setJSONPath(root map[string]any, field string, value any) {
 		if part == "" {
 			return
 		}
-		next, ok := current[part].(map[string]any)
+		next, ok := current.values[part].(*orderedObject)
 		if !ok {
-			next = make(map[string]any)
-			current[part] = next
+			next = &orderedObject{values: make(map[string]any)}
+			current.set(part, next)
 		}
 		current = next
 	}
 	last := strings.TrimSpace(parts[len(parts)-1])
 	if last != "" {
-		current[last] = value
+		current.set(last, value)
 	}
 }
 
@@ -489,10 +590,8 @@ func setJSONPath(root map[string]any, field string, value any) {
 // numbers, booleans, null, arrays and objects keep their JSON type; otherwise
 // the raw text is used as a plain string.
 func parseRewriteValue(value string) any {
-	var parsed any
-	decoder := json.NewDecoder(strings.NewReader(value))
-	decoder.UseNumber()
-	if err := decoder.Decode(&parsed); err == nil {
+	trimmed := strings.TrimSpace(value)
+	if parsed, err := parseOrderedJSON([]byte(trimmed)); err == nil {
 		return parsed
 	}
 	return value
