@@ -672,11 +672,22 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     }
     function setSessionExpanded(card, expanded) {
       const details = card.querySelector('.session-details');
-      card.querySelector('[data-session-toggle]').setAttribute('aria-expanded', String(expanded));
-      details.hidden = !expanded;
+      const toggle = card.querySelector('[data-session-toggle]');
       card.classList.toggle('expanded', expanded);
-      if (expanded) expandedSessions.add(card.dataset.sessionId);
-      else expandedSessions.delete(card.dataset.sessionId);
+      if (expanded) {
+        expandedSessions.add(card.dataset.sessionId);
+        // Collapsed cards skip detail syncing while streaming; catch up from
+        // the newest frame so expanding shows fresh content immediately.
+        if (lastSessionHTML) {
+          const doc = new DOMParser().parseFromString(lastSessionHTML, 'text/html');
+          const fresh = doc.querySelector('.session-card[data-session-id="' + card.dataset.sessionId + '"]');
+          if (fresh) updateSessionCard(card, fresh);
+        }
+      } else {
+        expandedSessions.delete(card.dataset.sessionId);
+      }
+      toggle.setAttribute('aria-expanded', String(expanded));
+      details.hidden = !expanded;
     }
     const metricTextInterval = 2000; // ms; how often live metric text (transfer/duration) may be written
     const pendingTextUpdates = new Map();
@@ -750,6 +761,9 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         if (summaryStructure(oldSummary) === summaryStructure(newSummary)) syncSessionSummary(oldSummary, newSummary);
         else { oldSummary.replaceWith(newSummary); renderIcons(newSummary); }
       }
+      // Hidden details do not need to churn on every streaming frame; they are
+      // synced when the card is expanded.
+      if (!oldCard.classList.contains('expanded')) return;
       const oldDetails = oldCard.querySelector('.session-details');
       const newDetails = newCard.querySelector('.session-details');
       if (!oldDetails || !newDetails) return;
@@ -1129,17 +1143,29 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       logPretty.setAttribute('aria-pressed', String(active));
       renderLogLines();
     });
-    fetch('/sessions').then(response => response.text()).then(reconcileSessionCards).catch(() => {});
+    fetch('/sessions').then(response => response.text()).then(html => { lastSessionHTML = html; reconcileSessionCards(html); }).catch(() => {});
     const sessionEvents = new EventSource('/sessions/stream');
     let pendingSessionHTML = null;
     let sessionReconcileTimer = null;
-    sessionEvents.addEventListener('sessions', event => {
-      pendingSessionHTML = event.data;
+    let sessionGestureActive = false;
+    let lastSessionHTML = '';
+    function scheduleSessionReconcile() {
       if (sessionReconcileTimer) return;
       sessionReconcileTimer = setTimeout(() => {
         sessionReconcileTimer = null;
         if (pendingSessionHTML != null) { const html = pendingSessionHTML; pendingSessionHTML = null; reconcileSessionCards(html); }
       }, 80);
+    }
+    // A click in progress must not race streaming DOM updates; while the
+    // pointer is down the newest frame is buffered and reconciled afterwards.
+    sessionList.addEventListener('pointerdown', function () { sessionGestureActive = true; }, true);
+    sessionList.addEventListener('pointerup', function () { sessionGestureActive = false; scheduleSessionReconcile(); }, true);
+    sessionList.addEventListener('pointercancel', function () { sessionGestureActive = false; scheduleSessionReconcile(); }, true);
+    sessionEvents.addEventListener('sessions', event => {
+      pendingSessionHTML = event.data;
+      lastSessionHTML = event.data;
+      if (sessionGestureActive) return;
+      scheduleSessionReconcile();
     });
     setTheme(document.documentElement.dataset.theme || 'dark');
     const initialView = viewFromHash();
