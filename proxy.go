@@ -388,7 +388,7 @@ func upstreamID(index int, upstream Upstream) string {
 	if upstream.Name == "" {
 		return fmt.Sprintf("UPSTREAM[%d]", index)
 	}
-	return fmt.Sprintf("UPSTREAM[%d:%s]", index, upstream.Name)
+	return upstream.Name
 }
 
 type routedUpstream struct {

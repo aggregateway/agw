@@ -997,7 +997,7 @@ func TestProxyRetriesWithinMatchedAppSelectorOnly(t *testing.T) {
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "luna backup" {
 		t.Fatalf("routed response = %d %q", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(logs.String(), "UPSTREAM[2:luna-backup] | ATTEMPT") || strings.Contains(logs.String(), "UPSTREAM[1:ds-video] | ATTEMPT") {
+	if !strings.Contains(logs.String(), "luna-backup | ATTEMPT") || strings.Contains(logs.String(), "ds-video | ATTEMPT") {
 		t.Fatalf("retry chain crossed AppSelector boundary: %q", logs.String())
 	}
 }
@@ -1155,13 +1155,13 @@ func TestProxySessionCardShowsAppSelectorAndUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(content, "codex-luna") || !strings.Contains(content, "UPSTREAM[0:d1v.ai]") {
+	if !strings.Contains(content, "codex-luna") || !strings.Contains(content, "d1v.ai") {
 		t.Fatalf("session card route details missing: %s", content)
 	}
 	if !strings.Contains(content, `class="session-cell session-model">gpt-5.6-luna<`) {
 		t.Fatalf("session card does not show the request model: %s", content)
 	}
-	if !strings.Contains(content, `class="session-cell session-selector">codex-luna<`) || !strings.Contains(content, `class="session-cell session-upstream">UPSTREAM[0:d1v.ai]<`) {
+	if !strings.Contains(content, `class="session-cell session-selector">codex-luna<`) || !strings.Contains(content, `class="session-cell session-upstream">d1v.ai<`) {
 		t.Fatalf("session card does not put selector/upstream in their own columns: %s", content)
 	}
 }
