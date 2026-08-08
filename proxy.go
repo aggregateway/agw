@@ -773,11 +773,19 @@ func applyRewrites(body []byte, rewrites []FieldRewrite) []byte {
 	if !ok {
 		return body
 	}
+	changed := false
 	for _, rewrite := range rewrites {
 		if !rewrite.RuleEnabled() {
 			continue
 		}
 		setJSONPath(root, rewrite.Field, parseRewriteValue(rewrite.Value))
+		changed = true
+	}
+	if !changed {
+		// No enabled rule ran, so the body must pass through untouched.
+		// Re-marshaling would only re-encode whitespace and make the caller
+		// think a disabled rule rewrote the request.
+		return body
 	}
 	encoded, err := json.Marshal(root)
 	if err != nil {
@@ -929,6 +937,9 @@ func applySelectorRewrites(body []byte, selectors []AppSelector, selected string
 			return body
 		}
 		for _, rewrite := range selector.Rewrite {
+			if !rewrite.RuleEnabled() {
+				continue
+			}
 			logger.Info("request body rewritten", "field", rewrite.Field, "value", rewrite.Value)
 			if session != nil {
 				session.addEvent("rewrite", rewrite.Field+" -> "+rewrite.Value)

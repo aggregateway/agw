@@ -383,6 +383,30 @@ func TestApplyRewritesSetsAndCreatesFields(t *testing.T) {
 	}
 }
 
+func TestApplyRewritesDisabledRulesPassThrough(t *testing.T) {
+	disabled := false
+	body := []byte(`{"model": "gpt-4o", "messages": []}`)
+	got := applyRewrites(body, []FieldRewrite{{Field: "model", Value: "deepseek-v4-flash", Enabled: &disabled}})
+	if !bytes.Equal(got, body) {
+		t.Fatalf("disabled rewrite must pass the body through untouched, got %q", got)
+	}
+}
+
+func TestDisabledRewriteDoesNotLog(t *testing.T) {
+	disabled := false
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	selectors := []AppSelector{{Name: "codex", Rewrite: []FieldRewrite{{Field: "model", Value: "deepseek-v4-flash", Enabled: &disabled}}}}
+	body := []byte(`{"model": "gpt-4o", "messages": []}`)
+	got := applySelectorRewrites(body, selectors, "codex", logger, nil)
+	if !bytes.Equal(got, body) {
+		t.Fatalf("disabled rewrite must not change the body, got %q", got)
+	}
+	if strings.Contains(logs.String(), "request body rewritten") {
+		t.Fatalf("disabled rewrite must not log: %q", logs.String())
+	}
+}
+
 func TestApplyRewritesPreservesKeyOrder(t *testing.T) {
 	body := []byte(`{"model":"deepseek","z":1,"a":{"b":2,"c":3},"m":[1,2]}`)
 	got := string(applyRewrites(body, []FieldRewrite{{Field: "model", Value: "gpt"}}))
