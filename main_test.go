@@ -1535,6 +1535,35 @@ func TestLogHubPersistenceAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestLogHubPersistentHistoryNotTruncatedTo100(t *testing.T) {
+	dir := t.TempDir()
+	hub := newLogHubPersistent(dir)
+	for i := 0; i < 150; i++ {
+		if _, err := hub.Write([]byte(fmt.Sprintf("line-%d\n", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub.close()
+
+	restarted := newLogHubPersistent(dir)
+	defer restarted.close()
+	_, history := restarted.subscribe()
+	if len(history) != 150 || history[0] != "line-0" || history[149] != "line-149" {
+		t.Fatalf("persistent history was truncated to %d lines", len(history))
+	}
+}
+
+func TestLogHubMemoryHistoryCapped(t *testing.T) {
+	hub := newLogHub()
+	for i := 0; i < 150; i++ {
+		_, _ = hub.Write([]byte(fmt.Sprintf("line-%d\n", i)))
+	}
+	_, history := hub.subscribe()
+	if len(history) != 100 || history[0] != "line-50" {
+		t.Fatalf("in-memory history = %d lines, first=%q", len(history), history[0])
+	}
+}
+
 func TestRecoverJSONLogsPanicAsStructuredJSON(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))

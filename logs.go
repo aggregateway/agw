@@ -9,20 +9,24 @@ import (
 )
 
 type logHub struct {
-	mu      sync.Mutex
-	clients map[chan string]struct{}
-	history []string
-	file    *os.File
+	mu           sync.Mutex
+	clients      map[chan string]struct{}
+	history      []string
+	historyLimit int
+	file         *os.File
 }
 
 func newLogHub() *logHub {
-	return &logHub{clients: make(map[chan string]struct{})}
+	return &logHub{clients: make(map[chan string]struct{}), historyLimit: 100}
 }
 
 // newLogHubPersistent appends every log line to dir/logs.jsonl and restores
 // the recent history from that file, so the request feed survives restarts.
 func newLogHubPersistent(dir string) *logHub {
 	hub := newLogHub()
+	// The file keeps every line, so let a refreshed feed replay a much larger
+	// slice of the persisted history instead of truncating to the in-memory cap.
+	hub.historyLimit = 2000
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return hub
 	}
@@ -34,8 +38,8 @@ func newLogHubPersistent(dir string) *logHub {
 	hub.file = file
 	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
 		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-		if len(lines) > 100 {
-			lines = lines[len(lines)-100:]
+		if len(lines) > hub.historyLimit {
+			lines = lines[len(lines)-hub.historyLimit:]
 		}
 		hub.history = lines
 	}
@@ -61,8 +65,8 @@ func (h *logHub) Write(data []byte) (int, error) {
 		_, _ = h.file.WriteString(message + "\n")
 	}
 	h.history = append(h.history, message)
-	if len(h.history) > 100 {
-		h.history = h.history[len(h.history)-100:]
+	if len(h.history) > h.historyLimit {
+		h.history = h.history[len(h.history)-h.historyLimit:]
 	}
 	for client := range h.clients {
 		select {
