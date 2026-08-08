@@ -20,7 +20,9 @@ type Options struct {
 	ConfigPath string
 	Listen     string
 	Timeout    time.Duration
-	Debug      bool
+	// AllowDebug gates the config's debug flag: without it, debug header
+	// logging stays off no matter what the config file or the client says.
+	AllowDebug bool
 	LogStderr  bool
 }
 
@@ -88,7 +90,7 @@ func RunWithOptions(opts Options) error {
 			logger.Info("externalized auth values into memory; open the management UI to keep them in the browser", "config", opts.ConfigPath)
 		}
 	}
-	proxy := &Proxy{Upstreams: upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: opts.ConfigPath, LogHub: hub, Sessions: sessions, Debug: settings.Debug || opts.Debug, SecretValues: secretValues}
+	proxy := &Proxy{Upstreams: upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: opts.ConfigPath, LogHub: hub, Sessions: sessions, AllowDebug: opts.AllowDebug, Debug: settings.Debug && opts.AllowDebug, SecretValues: secretValues}
 
 	handler := requestLogger(logger, proxy)
 	if adminUser != "" {
@@ -118,7 +120,7 @@ func Run(args []string) error {
 	flags.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "path to upstream config")
 	flags.StringVar(&opts.Listen, "listen", defaultAddr, "listen address")
 	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables the timeout")
-	flags.BoolVar(&opts.Debug, "debug", false, "log incoming request headers")
+	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "allow client config (debug: true) to enable request header logging")
 	flags.BoolVar(&opts.LogStderr, "log-stderr", false, "also write logs to stderr")
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

@@ -40,7 +40,7 @@ func newRootCommand(opts *agw.Options, defaultAddr, invalidPort string, logger *
 	flags.StringVar(&opts.ConfigPath, "config", opts.ConfigPath, "path to upstream config")
 	flags.StringVar(&opts.Listen, "listen", defaultAddr, "listen address (defaults to $PORT or :8080)")
 	flags.DurationVar(&opts.Timeout, "timeout", 0, "per-upstream request timeout; 0 disables the timeout")
-	flags.BoolVar(&opts.Debug, "debug", false, "log incoming request headers")
+	flags.BoolVar(&opts.AllowDebug, "allow-debug", false, "allow client config (debug: true) to enable request header logging")
 	flags.BoolVar(&opts.LogStderr, "log-stderr", false, "also write logs to stderr (default: only the /logs feed)")
 	// Keep accepting single-dash long flags (-config) as the original CLI did;
 	// pflag would otherwise read them as shorthand clusters.
@@ -51,7 +51,7 @@ func newRootCommand(opts *agw.Options, defaultAddr, invalidPort string, logger *
 // normalizeArgs rewrites known long flags written with a single dash into
 // double-dash form so Go-style invocations like -config keep working.
 func normalizeArgs(args []string) []string {
-	longFlags := map[string]bool{"config": true, "listen": true, "timeout": true, "debug": true, "log-stderr": true}
+	longFlags := map[string]bool{"config": true, "listen": true, "timeout": true, "allow-debug": true, "log-stderr": true}
 	out := make([]string, 0, len(args))
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") {

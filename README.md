@@ -12,7 +12,7 @@ go run ./cmd/agw
 ```
 
 `-config` 默认为当前目录的 `config.yaml`。监听端口优先读取环境变量 `PORT`，未设置时默认为 `:8080`；也可以用 `-listen` 覆盖。`-timeout` 默认是 `0`，不会设置请求总超时，适合长时间的 SSE 流；需要限制时可以显式设置，例如 `-timeout 2m`。
-使用 `-debug` 可以在启动时开启 request header 日志；页面上的 `debug: true` toggle 可以在运行中切换并保存，无需重启。
+使用 `--allow-debug` 允许 request header 日志生效：未设置时，即使 `config.yaml` 里写了 `debug: true`、或通过页面提交修改，运行时都保持关闭（页面也不会显示 Debug headers 开关）；设置后，配置里的 `debug: true` 才会在运行时生效，并可通过页面 toggle 切换保存。
 日志默认只进 `/logs` 实时流（保留最近 100 条），**不写入 stderr**，避免托管方从终端日志里看到敏感信息；需要同时输出到 stderr 时加 `-log-stderr`（或 `--log-stderr`）。
 
 公开托管时建议设置 `AGW_ADMIN_USER` 和 `AGW_ADMIN_PASSWORD`（两者必须同时设置）。设置后，配置页 `/`、`/config`、`/logs` 和 Session journal（`/sessions*`）这些管理路径需要 HTTP Basic Auth 才能访问，代理路径（`/v1/...`）保持开放；未设置时管理面不启用认证，保持原来的行为。凭据只从环境变量读取，不会写入或出现在配置页中。

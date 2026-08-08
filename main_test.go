@@ -1010,10 +1010,11 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	proxy := &Proxy{
-		Upstreams: []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
-		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		Config:    configPath,
+		Upstreams:  []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
+		Client:     http.DefaultClient,
+		Logger:     slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		Config:     configPath,
+		AllowDebug: true,
 	}
 	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"appSelectors":[{"name":"codex","match":{"headers":[{"name":"User-Agent","operator":"regex","value":"^Codex","caseSensitive":true}]}}],"upstreams":[{"url":"https://new.example","appSelectors":["codex"],"authorization":{"type":"none"}}]}`))
 	recorder := httptest.NewRecorder()
@@ -1028,6 +1029,37 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 	settings, err := loadSettings(configPath)
 	if err != nil || !settings.Debug || settings.Upstreams[0].URL != "https://new.example" || !settings.AppSelectors[0].Match.Headers[0].CaseSensitive {
 		t.Fatalf("saved settings = %#v, error = %v", settings, err)
+	}
+}
+
+func TestUpdateConfigDebugRequiresAllowDebug(t *testing.T) {
+	configPath := t.TempDir() + "/config.yaml"
+	if err := os.WriteFile(configPath, []byte("debug: true\nupstreams:\n- url: https://old.example\n  authorization:\n    type: none\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &Proxy{
+		Upstreams: []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
+		Client:    http.DefaultClient,
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		Config:    configPath,
+		Debug:     true, // loaded from disk but --allow-debug was not passed
+	}
+	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"upstreams":[{"url":"https://new.example","authorization":{"type":"none"}}],"appSelectors":[]}`))
+	recorder := httptest.NewRecorder()
+
+	proxy.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if proxy.Debug {
+		t.Fatalf("client debug change must not take effect without AllowDebug: debug=%t", proxy.Debug)
+	}
+	settings, err := loadSettings(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Debug {
+		t.Fatalf("client debug change must not be persisted without AllowDebug: %#v", settings)
 	}
 }
 
@@ -1378,6 +1410,7 @@ func TestConfigYAMLViewAndImport(t *testing.T) {
 		Upstreams:    []Upstream{{Name: "openai", URL: "https://api.openai.com/v1", Authorization: &Authorization{Type: "bearer", Value: "sk-secret"}, AppSelectors: []string{"chat"}}},
 		AppSelectors: []AppSelector{{Name: "chat", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/chat/completions"}}}}},
 		Debug:        true,
+		AllowDebug:   true,
 		Config:       t.TempDir() + "/config.yaml",
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
@@ -1509,6 +1542,7 @@ func TestConfigUpdatePreservesSecretReferences(t *testing.T) {
 		SecretValues: map[string]string{"openai": "sk-original"},
 		Config:       configPath,
 		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		AllowDebug:   true,
 	}
 	recorder := httptest.NewRecorder()
 	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"upstreams":[{"name":"openai","url":"https://api.openai.com/v1","authorization":{"type":"bearer","value":"secret:openai"}}],"appSelectors":[]}`)))
@@ -1654,7 +1688,7 @@ func TestExternalizeSecretsKeysIndependentPerValue(t *testing.T) {
 
 func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, false)
+	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, false, false)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("config page status = %d", recorder.Code)
 	}
@@ -1696,7 +1730,7 @@ func TestConfigPageRendersBodyMatchRules(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), []AppSelector{
 		{Name: "deepseek", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek", CaseSensitive: true}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}}},
-	}, false)
+	}, false, true)
 	content := recorder.Body.String()
 	for _, expected := range []string{`value="deepseek"`, `value="model"`, `data-rule-type="body"`, `data-case-sensitive="true"`} {
 		if !strings.Contains(content, expected) {
@@ -1707,6 +1741,22 @@ func TestConfigPageRendersBodyMatchRules(t *testing.T) {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page rewrite rules missing %q", expected)
 		}
+	}
+}
+
+func TestConfigPageDebugToggleState(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, true, true)
+	content := recorder.Body.String()
+	if !strings.Contains(content, `id="debug-toggle" type="checkbox" checked`) {
+		t.Fatalf("debug toggle should be checked when allowed and debug is on")
+	}
+
+	recorder = httptest.NewRecorder()
+	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, true, false)
+	content = recorder.Body.String()
+	if strings.Contains(content, `class="debug-toggle"`) {
+		t.Fatalf("debug toggle must be hidden entirely without --allow-debug")
 	}
 }
 

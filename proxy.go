@@ -108,12 +108,15 @@ type Settings struct {
 }
 
 type Proxy struct {
-	Upstreams    []Upstream
-	Client       *http.Client
-	Logger       Logger
-	Config       string
-	LogHub       *logHub
-	Sessions     *sessionHub
+	Upstreams []Upstream
+	Client    *http.Client
+	Logger    Logger
+	Config    string
+	LogHub    *logHub
+	Sessions  *sessionHub
+	// AllowDebug gates the config's debug flag. When false, debug header
+	// logging is disabled and client-side changes to debug never take effect.
+	AllowDebug   bool
 	Debug        bool
 	AppSelectors []AppSelector
 	SecretValues map[string]string
@@ -995,10 +998,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	upstreams := append([]Upstream(nil), p.Upstreams...)
 	appSelectors := append([]AppSelector(nil), p.AppSelectors...)
 	debug := p.Debug
+	allowDebug := p.AllowDebug
 	p.Mu.RUnlock()
 
 	if r.URL.Path == "/" && r.Method == http.MethodGet {
-		serveConfigPage(w, r, appSelectors, debug)
+		serveConfigPage(w, r, appSelectors, debug, allowDebug)
 		return
 	}
 	if r.URL.Path == "/config/yaml" && r.Method == http.MethodGet {
@@ -1287,6 +1291,11 @@ func (p *Proxy) updateConfig(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "invalid config: "+err.Error(), http.StatusBadRequest)
 		return
+	}
+	if !p.AllowDebug {
+		// The server was not started with --allow-debug, so client changes to
+		// the debug flag are ignored entirely: not applied and not persisted.
+		settings.Debug = false
 	}
 	p.Mu.RLock()
 	if settings.Upstreams == nil {

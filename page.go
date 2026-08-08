@@ -19,6 +19,7 @@ type configView struct {
 
 type pageView struct {
 	Debug        bool
+	AllowDebug   bool
 	AppSelectors []AppSelector
 }
 
@@ -356,10 +357,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         <div><p class="eyebrow">gateway control</p><h1>AGW</h1></div>
       </div>
       <div class="appbar-actions">
-        <label class="debug-toggle" title="记录客户端请求头；日志可能包含认证信息">
+        {{if .AllowDebug}}<label class="debug-toggle" title="记录客户端请求头；日志可能包含认证信息">
           <input id="debug-toggle" type="checkbox"{{if .Debug}} checked{{end}}>
           <span class="switch"></span><span>Debug headers</span>
-        </label>
+        </label>{{end}}
         <span id="status" aria-live="polite"></span>
         <button class="icon-button" type="button" id="theme-toggle" title="切换到浅色主题" aria-label="切换到浅色主题"><i data-lucide="sun"></i></button>
         <button class="icon-button" type="button" title="刷新配置" aria-label="刷新配置" hx-get="/config" hx-target="#config-table" hx-swap="innerHTML"><i data-lucide="refresh-cw"></i></button>
@@ -952,7 +953,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       }
       status.className = ''; status.textContent = '保存中'; saveButton.disabled = true;
       try {
-        const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: document.getElementById('debug-toggle').checked, appSelectors, upstreams})});
+        const debugToggle = document.getElementById('debug-toggle');
+        const response = await fetch('/config', {method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({debug: debugToggle ? debugToggle.checked : false, appSelectors, upstreams})});
         if (!response.ok) throw new Error(await response.text());
         const result = await response.json().catch(() => null);
         if (result && result.externalized) mergeExternalizedSecrets(result.externalized);
@@ -1177,10 +1179,10 @@ func configViews(upstreams []Upstream) []configView {
 	return views
 }
 
-func serveConfigPage(w http.ResponseWriter, _ *http.Request, selectors []AppSelector, debug bool) {
+func serveConfigPage(w http.ResponseWriter, _ *http.Request, selectors []AppSelector, debug, allowDebug bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	if err := pageTemplate.Execute(w, pageView{Debug: debug, AppSelectors: selectors}); err != nil {
+	if err := pageTemplate.Execute(w, pageView{Debug: debug, AllowDebug: allowDebug, AppSelectors: selectors}); err != nil {
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
 }
