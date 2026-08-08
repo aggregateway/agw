@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -1450,6 +1451,22 @@ func TestMemoryConfigStore(t *testing.T) {
 	settings, err := loadSettings(store)
 	if err != nil || !settings.Debug || len(settings.Upstreams) != 1 {
 		t.Fatalf("memory config settings = %#v err=%v", settings, err)
+	}
+}
+
+func TestEnsureConfigCreatesMissingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.yaml")
+	created, err := ensureConfig(path)
+	if err != nil || !created {
+		t.Fatalf("ensureConfig = %v, %v", created, err)
+	}
+	settings, err := loadSettings(FileConfig(path))
+	if err != nil || len(settings.Upstreams) != 1 || settings.Upstreams[0].URL != "https://example.com/v1" {
+		t.Fatalf("created config does not load: %#v err=%v", settings, err)
+	}
+	created, err = ensureConfig(path)
+	if err != nil || created {
+		t.Fatalf("second ensureConfig should not rewrite: %v, %v", created, err)
 	}
 }
 

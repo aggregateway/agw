@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -71,6 +72,10 @@ func RunWithOptions(opts Options) error {
 		return err
 	}
 
+	created, err := ensureConfig(opts.ConfigPath)
+	if err != nil {
+		return err
+	}
 	settings, err := loadSettings(FileConfig(opts.ConfigPath))
 	if err != nil {
 		return err
@@ -127,6 +132,9 @@ func RunWithOptions(opts Options) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	logger.Info("server listening", "addr", opts.Listen, "upstreams", len(settings.Upstreams), "debug", proxy.Debug)
+	if created {
+		logger.Info("config file created with a starter template", "path", opts.ConfigPath)
+	}
 	if opts.Dev {
 		logger.Info("dev mode: templates loaded from disk with hot reload", "dir", "templates")
 	}
@@ -134,6 +142,37 @@ func RunWithOptions(opts Options) error {
 		return err
 	}
 	return nil
+}
+
+const defaultConfigTemplate = `# AGW gateway config — created automatically because the file was missing.
+# Manage upstreams and app selectors in the management UI; saving rewrites this file.
+debug: false
+appSelectors: []
+upstreams:
+  - name: default
+    url: https://example.com/v1
+    authorization:
+      type: none
+`
+
+// ensureConfig creates the config file with a starter template when it is
+// missing, so the gateway can boot and be configured from the UI. It reports
+// whether a new file was written.
+func ensureConfig(path string) (bool, error) {
+	if _, err := os.ReadFile(path); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	if dir := filepath.Dir(path); dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return false, err
+		}
+	}
+	if err := os.WriteFile(path, []byte(defaultConfigTemplate), 0600); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // gatewayHandler builds the complete HTTP middleware chain (request logging,
