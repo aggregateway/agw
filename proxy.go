@@ -983,6 +983,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		copyHeaders(req.Header, r.Header)
+		// The body may have been rewritten (different length), so the stale
+		// Content-Length copied from the client must not reach the wire; the
+		// Transport derives the correct value from req.ContentLength.
+		req.Header.Del("Content-Length")
 		// Keep error bodies readable in logs and let the proxy return plain text.
 		req.Header.Set("Accept-Encoding", "identity")
 		if upstream.Authorization == nil || !strings.EqualFold(upstream.Authorization.Type, "none") {

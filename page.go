@@ -208,12 +208,17 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .payload-preview { margin: 12px 0 0; overflow: hidden; border: 1px solid #dce7e2; border-radius: 5px; background: #12211e; }
     .payload-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; color: #b8ccc5; border-bottom: 1px solid #29423c; }
     .payload-preview-head h3 { margin: 0; color: #dceae5; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
-    .payload-preview-head span { overflow: hidden; color: #8eaaa1; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-preview-head .payload-meta { overflow: hidden; color: #8eaaa1; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .payload-preview-head .payload-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+    .payload-preview-head .payload-actions .icon-button { width: 26px; height: 26px; color: #8eaaa1; }
+    .payload-preview-head .payload-actions .icon-button:hover { color: #dceae5; background: rgba(255, 255, 255, .08); }
+    .payload-preview-head .payload-actions .icon-button.is-active { color: #cbe86b; }
     .payload-preview pre { max-height: 300px; padding: 11px; margin: 0; overflow: auto; color: #cae0d8; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .request-preview { border-color: #365d50; }
     .request-preview .payload-preview-head { background: #162a24; }
-    .session-detail-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(240px, .9fr); gap: 18px; padding-top: 12px; }
-    .session-detail-grid h3 { margin: 0 0 8px; color: #647773; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
+    .session-headers { padding-top: 12px; }
+    .session-events { padding-top: 12px; }
+    .session-headers h3, .session-events h3 { margin: 0 0 8px; color: #647773; font-size: 11px; font-weight: 800; letter-spacing: 0; text-transform: uppercase; }
     .header-list { max-height: 190px; padding: 0; margin: 0; overflow: auto; }
     .header-list div { display: grid; grid-template-columns: 145px minmax(0, 1fr); gap: 10px; padding: 5px 0; border-bottom: 1px solid #edf2ef; }
     .header-list dt { color: #6d807a; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
@@ -298,14 +303,14 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .session-id, :root[data-theme="dark"] .session-metric small, :root[data-theme="dark"] .session-overview small { color: #879e96; }
     :root[data-theme="dark"] .session-route { color: #8bc7a9; }
     :root[data-theme="dark"] .session-metric strong, :root[data-theme="dark"] .session-overview strong, :root[data-theme="dark"] .header-list dd, :root[data-theme="dark"] .request-list { color: #d1dfd9; }
-    :root[data-theme="dark"] .session-detail-grid h3, :root[data-theme="dark"] .header-list dt, :root[data-theme="dark"] .gateway-events time { color: #93aaa1; }
+    :root[data-theme="dark"] .session-headers h3, :root[data-theme="dark"] .session-events h3, :root[data-theme="dark"] .header-list dt, :root[data-theme="dark"] .gateway-events time { color: #93aaa1; }
     :root[data-theme="dark"] .gateway-events li { color: #c9d8d1; border-color: #293d38; }
     :root[data-theme="dark"] .gateway-event-kind { color: #7fcaab; }
     :root[data-theme="dark"] .is-completed { color: #b5c6c0; background: #263734; }
     :root[data-theme="dark"] .is-warning { color: #f0c466; background: #453719; }
     :root[data-theme="dark"] .is-error { color: #f3aaa6; background: #48292a; }
     :root[data-theme="dark"] .session-empty { color: #8ba198; }
-    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-workspace { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .session-detail-grid { grid-template-columns: 1fr; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
+    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-workspace { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
     @media (max-width: 760px) { .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr); } }
   </style>
 </head>
@@ -369,29 +374,108 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     function renderIcons(scope) { if (window.lucide) window.lucide.createIcons({root: scope || document, attrs: {'stroke-width': 1.8}}); }
     function setTheme(theme) { document.documentElement.dataset.theme = theme; try { localStorage.setItem('agw-theme', theme); } catch (_) {} const isDark = theme === 'dark'; themeToggle.title = isDark ? '切换到浅色主题' : '切换到深色主题'; themeToggle.setAttribute('aria-label', themeToggle.title); themeToggle.innerHTML = '<i data-lucide="' + (isDark ? 'sun' : 'moon') + '"></i>'; renderIcons(themeToggle); }
     function setTelemetryView(view, focus) { document.querySelectorAll('[data-telemetry-tab]').forEach(tab => { const active = tab.dataset.telemetryTab === view; tab.setAttribute('aria-selected', String(active)); document.getElementById(tab.getAttribute('aria-controls')).hidden = !active; if (active && focus) tab.focus(); }); }
-    async function hydrateSessionPayloads(card) { const sessionID = card.dataset.sessionId; for (const target of card.querySelectorAll('[data-session-payload]')) { const kind = target.dataset.sessionPayload; const cacheKey = sessionID + ':' + kind; if (kind === 'request' && requestPayloadCache.has(cacheKey)) { target.textContent = requestPayloadCache.get(cacheKey); continue; } try { const response = await fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind); if (!response.ok) continue; const payload = await response.text(); target.textContent = payload; if (kind === 'request') requestPayloadCache.set(cacheKey, payload); } catch (_) {} } }
+    function replacePayloadText(target, text) {
+      // Replacing textContent resets the scroll position of the <pre>; restore
+      // it so live updates never yank the reader back to the top.
+      const scrollTop = target.scrollTop;
+      target.textContent = text;
+      target.scrollTop = scrollTop;
+    }
+    function renderPayload(target) {
+      const raw = target.dataset.raw || '';
+      const preview = target.closest('.payload-preview');
+      const pretty = preview && preview.querySelector('[data-payload-pretty]');
+      if (pretty && pretty.classList.contains('is-active')) {
+        try { replacePayloadText(target, JSON.stringify(JSON.parse(raw), null, 2)); return; } catch (_) {}
+      }
+      replacePayloadText(target, raw);
+    }
+    function copyText(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+      return new Promise(function (resolve, reject) {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.append(area);
+        area.select();
+        try { document.execCommand('copy') ? resolve() : reject(new Error('copy failed')); } catch (error) { reject(error); } finally { area.remove(); }
+      });
+    }
+    async function hydrateSessionPayloads(card) { const sessionID = card.dataset.sessionId; for (const target of card.querySelectorAll('[data-session-payload]')) { const kind = target.dataset.sessionPayload; const cacheKey = sessionID + ':' + kind; if (kind === 'request' && requestPayloadCache.has(cacheKey)) { target.dataset.raw = requestPayloadCache.get(cacheKey); renderPayload(target); continue; } try { const response = await fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind); if (!response.ok) continue; const payload = await response.text(); target.dataset.raw = payload; renderPayload(target); if (kind === 'request') requestPayloadCache.set(cacheKey, payload); } catch (_) {} } }
     function setSessionExpanded(card, expanded) { const details = card.querySelector('.session-details'); card.querySelector('[data-session-toggle]').setAttribute('aria-expanded', String(expanded)); details.hidden = !expanded; card.classList.toggle('expanded', expanded); if (expanded) { expandedSessions.add(card.dataset.sessionId); hydrateSessionPayloads(card); } else { expandedSessions.delete(card.dataset.sessionId); requestPayloadCache.delete(card.dataset.sessionId + ':request'); } }
+    function syncSessionSummary(oldSummary, newSummary) {
+      const indicator = oldSummary.querySelector('.session-indicator');
+      const nextIndicator = newSummary.querySelector('.session-indicator');
+      if (indicator && nextIndicator && indicator.className !== nextIndicator.className) indicator.className = nextIndicator.className;
+      const state = oldSummary.querySelector('.session-state');
+      const nextState = newSummary.querySelector('.session-state');
+      if (state && nextState) {
+        if (state.className !== nextState.className) state.className = nextState.className;
+        if (state.textContent !== nextState.textContent) state.textContent = nextState.textContent;
+      }
+      for (const selector of ['.session-path', '.session-id', '.session-route', '.session-model']) {
+        const el = oldSummary.querySelector(selector);
+        const next = newSummary.querySelector(selector);
+        if (el && next && el.textContent !== next.textContent) el.textContent = next.textContent;
+      }
+      const metrics = [...oldSummary.querySelectorAll('.session-metric')];
+      const nextMetrics = [...newSummary.querySelectorAll('.session-metric')];
+      metrics.forEach((metric, i) => {
+        const next = nextMetrics[i];
+        if (!next) return;
+        const strong = metric.querySelector('strong');
+        const nextStrong = next.querySelector('strong');
+        if (strong && nextStrong && strong.textContent !== nextStrong.textContent) strong.textContent = nextStrong.textContent;
+        const small = metric.querySelector('small');
+        const nextSmall = next.querySelector('small');
+        if (small && nextSmall && small.textContent !== nextSmall.textContent) small.textContent = nextSmall.textContent;
+      });
+    }
+    function syncSessionOverview(oldOverview, newOverview) {
+      const items = [...oldOverview.querySelectorAll('span')];
+      const nextItems = [...newOverview.querySelectorAll('span')];
+      items.forEach((item, i) => {
+        const next = nextItems[i];
+        if (!next) return;
+        const strong = item.querySelector('strong');
+        const nextStrong = next.querySelector('strong');
+        if (strong && nextStrong) {
+          if (strong.className !== nextStrong.className) strong.className = nextStrong.className;
+          if (strong.textContent !== nextStrong.textContent) strong.textContent = nextStrong.textContent;
+        }
+        const small = item.querySelector('small');
+        const nextSmall = next.querySelector('small');
+        if (small && nextSmall && small.textContent !== nextSmall.textContent) small.textContent = nextSmall.textContent;
+      });
+    }
+    function summaryStructure(summary) { return [...summary.children].map(el => el.className).join('|'); }
     function updateSessionCard(oldCard, newCard) {
       const oldSummary = oldCard.querySelector('.session-summary');
       const newSummary = newCard.querySelector('.session-summary');
-      if (oldSummary && newSummary && oldSummary.outerHTML !== newSummary.outerHTML) { oldSummary.replaceWith(newSummary); renderIcons(newSummary); }
+      if (oldSummary && newSummary && oldSummary.outerHTML !== newSummary.outerHTML) {
+        if (summaryStructure(oldSummary) === summaryStructure(newSummary)) syncSessionSummary(oldSummary, newSummary);
+        else { oldSummary.replaceWith(newSummary); renderIcons(newSummary); }
+      }
       const oldDetails = oldCard.querySelector('.session-details');
       const newDetails = newCard.querySelector('.session-details');
       if (!oldDetails || !newDetails) return;
       const oldOverview = oldDetails.querySelector('.session-overview');
       const newOverview = newDetails.querySelector('.session-overview');
-      if (oldOverview && newOverview && oldOverview.outerHTML !== newOverview.outerHTML) oldOverview.replaceWith(newOverview);
-      const oldGrid = oldDetails.querySelector('.session-detail-grid');
-      const newGrid = newDetails.querySelector('.session-detail-grid');
-      if (oldGrid && newGrid && oldGrid.outerHTML !== newGrid.outerHTML) oldGrid.replaceWith(newGrid);
-      const grid = oldDetails.querySelector('.session-detail-grid');
+      if (oldOverview && newOverview && oldOverview.outerHTML !== newOverview.outerHTML) syncSessionOverview(oldOverview, newOverview);
+      const oldHeaders = oldDetails.querySelector('.session-headers');
+      const newHeaders = newDetails.querySelector('.session-headers');
+      if (oldHeaders && newHeaders && oldHeaders.outerHTML !== newHeaders.outerHTML) oldHeaders.replaceWith(newHeaders);
+      const oldEvents = oldDetails.querySelector('.session-events');
+      const newEvents = newDetails.querySelector('.session-events');
+      if (oldEvents && newEvents && oldEvents.outerHTML !== newEvents.outerHTML) oldEvents.replaceWith(newEvents);
       const newRequest = newDetails.querySelector('.request-preview');
       const oldRequest = oldDetails.querySelector('.request-preview');
-      if (newRequest && !oldRequest) { grid.insertAdjacentElement('beforebegin', newRequest); renderIcons(newRequest); hydrateSessionPayloads(oldCard); }
+      if (newRequest && !oldRequest) { oldDetails.querySelector('.session-headers').insertAdjacentElement('afterend', newRequest); renderIcons(newRequest); hydrateSessionPayloads(oldCard); }
       else if (newRequest && oldRequest) { const oldHead = oldRequest.querySelector('.payload-preview-head span'); const newHead = newRequest.querySelector('.payload-preview-head span'); if (oldHead && newHead && oldHead.textContent !== newHead.textContent) oldHead.textContent = newHead.textContent; }
       const newResponse = newDetails.querySelector('.response-preview');
       const oldResponse = oldDetails.querySelector('.response-preview');
-      if (newResponse && !oldResponse) { grid.insertAdjacentElement('beforebegin', newResponse); renderIcons(newResponse); hydrateSessionPayloads(oldCard); }
+      if (newResponse && !oldResponse) { const anchor = oldDetails.querySelector('.request-preview') || oldDetails.querySelector('.session-headers'); anchor.insertAdjacentElement('afterend', newResponse); renderIcons(newResponse); hydrateSessionPayloads(oldCard); }
       else if (newResponse && oldResponse) { const oldHead = oldResponse.querySelector('.payload-preview-head span'); const newHead = newResponse.querySelector('.payload-preview-head span'); if (oldHead && newHead && oldHead.textContent !== newHead.textContent) oldHead.textContent = newHead.textContent; }
       if (oldCard.classList.contains('expanded')) { const toggle = oldCard.querySelector('[data-session-toggle]'); if (toggle) toggle.setAttribute('aria-expanded', 'true'); }
     }
@@ -402,9 +486,16 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       const existingById = new Map([...sessionList.querySelectorAll('.session-card')].map(card => [card.dataset.sessionId, card]));
       incoming.forEach(card => {
         const oldCard = existingById.get(card.dataset.sessionId);
-        if (oldCard) { updateSessionCard(oldCard, card); sessionList.append(oldCard); }
+        if (oldCard) updateSessionCard(oldCard, card);
         else { sessionList.append(card); renderIcons(card); }
       });
+      // Moving a card node resets the scroll position of its scrollable
+      // children (e.g. the response preview), so only reorder when the
+      // sequence actually changed instead of shuffling every SSE batch.
+      const currentIds = [...sessionList.querySelectorAll('.session-card')].map(card => card.dataset.sessionId);
+      if (currentIds.join('\n') !== incoming.map(card => card.dataset.sessionId).join('\n')) {
+        incoming.forEach(card => { const oldCard = existingById.get(card.dataset.sessionId); if (oldCard) sessionList.append(oldCard); });
+      }
       sessionList.querySelectorAll('.session-card').forEach(card => { if (!incomingIds.has(card.dataset.sessionId)) card.remove(); });
       const empty = sessionList.querySelector('.session-empty');
       if (incoming.length) { if (empty) empty.remove(); }
@@ -415,7 +506,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         const card = pre.closest('.session-card');
         const indicator = card.querySelector('.session-indicator');
         if (indicator && /is-(completed|warning|error)/.test(indicator.className)) return;
-        fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/response').then(response => response.text()).then(payload => { if (pre.textContent !== payload) pre.textContent = payload; }).catch(() => {});
+        fetch('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/response').then(response => response.text()).then(payload => { if (pre.dataset.raw !== payload) { pre.dataset.raw = payload; renderPayload(pre); } }).catch(() => {});
       });
     }
     function updateSummary() { document.getElementById('upstream-count').textContent = table.querySelectorAll('tr[data-row]').length + ' upstreams'; }
@@ -612,8 +703,35 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     });
     document.addEventListener('click', function (event) {
       const toggle = event.target.closest('[data-session-toggle]');
-      if (!toggle) return;
-      const card = toggle.closest('.session-card'); setSessionExpanded(card, toggle.getAttribute('aria-expanded') !== 'true');
+      if (toggle) { const card = toggle.closest('.session-card'); setSessionExpanded(card, toggle.getAttribute('aria-expanded') !== 'true'); return; }
+      const pretty = event.target.closest('[data-payload-pretty]');
+      if (pretty) {
+        const preview = pretty.closest('.payload-preview');
+        const target = preview.querySelector('[data-session-payload]');
+        const active = pretty.classList.contains('is-active');
+        if (!active) {
+          try { JSON.parse(target.dataset.raw || ''); } catch (_) { return; }
+        }
+        pretty.classList.toggle('is-active', !active);
+        pretty.setAttribute('aria-pressed', String(!active));
+        renderPayload(target);
+        return;
+      }
+      const copy = event.target.closest('[data-payload-copy]');
+      if (copy) {
+        const preview = copy.closest('.payload-preview');
+        const target = preview.querySelector('[data-session-payload]');
+        const text = target.dataset.raw || target.textContent;
+        copyText(text).then(() => {
+          const original = copy.title;
+          copy.title = '已复制';
+          copy.setAttribute('aria-label', '已复制');
+          copy.innerHTML = '<i data-lucide="check"></i>';
+          renderIcons(copy);
+          setTimeout(() => { copy.title = original; copy.setAttribute('aria-label', original); copy.innerHTML = '<i data-lucide="copy"></i>'; renderIcons(copy); }, 1200);
+        }).catch(() => {});
+        return;
+      }
     });
     document.addEventListener('keydown', function (event) {
       const current = event.target.closest('[data-telemetry-tab]');

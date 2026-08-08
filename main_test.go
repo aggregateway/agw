@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -901,6 +902,61 @@ upstreams:
 `))
 	if err == nil || !strings.Contains(err.Error(), "unknown app selector") {
 		t.Fatalf("unknown selector reference error = %v", err)
+	}
+}
+
+func TestProxyRewritesBodyUpdatesContentLength(t *testing.T) {
+	var gotContentLength int64
+	var gotHeaderContentLength string
+	var gotBody string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentLength = r.ContentLength
+		gotHeaderContentLength = r.Header.Get("Content-Length")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	proxy := &Proxy{
+		Upstreams: []Upstream{
+			{URL: upstream.URL, AppSelectors: []string{"rewrite"}, Authorization: &Authorization{Type: "none"}},
+		},
+		AppSelectors: []AppSelector{
+			{
+				Name:    "rewrite",
+				Match:   AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek"}}},
+				Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}},
+			},
+		},
+		Client: http.DefaultClient,
+		Logger: log.New(io.Discard, "", 0),
+	}
+
+	original := `{"model":"deepseek","messages":[]}`
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(original))
+	request.Header.Set("Content-Type", "application/json")
+	// A real server request keeps Content-Length in the header map; simulate
+	// the stale length the proxy would otherwise copy verbatim.
+	request.Header.Set("Content-Length", strconv.Itoa(len(original)))
+	recorder := httptest.NewRecorder()
+
+	proxy.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("proxy status = %d", recorder.Code)
+	}
+	if !strings.Contains(gotBody, `"model":"gpt-5.6-luna"`) {
+		t.Fatalf("upstream body was not rewritten: %s", gotBody)
+	}
+	if int64(len(gotBody)) == int64(len(original)) {
+		t.Fatalf("test body lengths should differ to prove the fix")
+	}
+	if gotContentLength != int64(len(gotBody)) {
+		t.Fatalf("upstream ContentLength = %d, want %d (stale header %q)", gotContentLength, len(gotBody), gotHeaderContentLength)
+	}
+	if gotHeaderContentLength != strconv.Itoa(len(gotBody)) {
+		t.Fatalf("upstream Content-Length header = %q, want %d", gotHeaderContentLength, len(gotBody))
 	}
 }
 
