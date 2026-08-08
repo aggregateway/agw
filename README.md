@@ -174,9 +174,9 @@ upstreams:
 ```
 
 页面下方的实时日志通过 SSE 从 `/logs` 推送，保留最近 100 条日志并自动滚动到底部。
-日志下方的 Session journal 通过 `/sessions` 和 `/sessions/stream` 展示最近的 API 请求；每个入站请求由服务端分配独立 UUIDv7，不会依据客户端的 `Session-Id`、`Thread-Id` 或 `X-Client-Request-Id` 合并卡片。卡片直接显示请求中的 `model`：未命中 rewrite 时显示原值（如 `gpt-5.6-luna`），命中 rewrite 时显示 `原值 => 改写值`（如 `deepseek-v4-flash => gpt-5.6-luna`），其中改写值即实际转发的值。卡片可展开查看状态、耗时、传输量、客户端 request header 与请求时间线；`Authorization`、cookie、API key 等敏感 header 会脱敏。streaming 期间卡片在页面里做增量更新（只替换摘要、概览和事件区域，payload 预览原地刷新），不会整块重绘导致频闪。此 UI 使用进程内的结构化会话状态，因此不需要把终端日志改为 `slog` JSON；若后续接入外部日志平台，再额外配置 JSON `slog` handler 即可。
-对于 JSON、SSE 和其他文本内容，Session journal 会截获请求体及通过 `io.MultiWriter` 实际转发给客户端的响应。正文不会塞入 Session SSE 事件：请求体完整写入进程专用的临时文件，展开卡片时才完整加载；响应也落盘，展开卡片时读取最新 64 KiB，持续刷新时等效于 `tail -f`。这避免大 payload 让 SSE 重连，同时不截断请求体。临时文件会在 gateway 退出时删除。
-服务端日志统一使用接近 Gin 的格式和 `|` 分隔符；access log 包含状态码、耗时、客户端地址、method、path 和响应大小，upstream log 额外记录尝试、响应和重试事件。
+日志下方的 Session journal 通过 `/sessions` 和 `/sessions/stream` 展示最近的 API 请求；每个入站请求由服务端分配独立 UUIDv7，不会依据客户端的 `Session-Id`、`Thread-Id` 或 `X-Client-Request-Id` 合并卡片。卡片直接显示请求中的 `model`：未命中 rewrite 时显示原值（如 `gpt-5.6-luna`），命中 rewrite 时显示 `原值 => 改写值`（如 `deepseek-v4-flash => gpt-5.6-luna`），其中改写值即实际转发的值。卡片可展开查看状态、耗时、传输量、客户端 request header 与请求时间线；`Authorization`、cookie、API key 等敏感 header 会脱敏。streaming 期间卡片在页面里做增量更新（只就地更新摘要、概览和事件区域），不会整块重绘导致频闪。Session journal 由进程内结构化会话状态驱动，与日志流相互独立。
+对于 JSON、SSE 和其他文本内容，Session journal 会截获请求体及实际转发给客户端的响应。正文不会塞入 Session SSE 事件：请求体与响应都写入进程专用的临时文件，卡片提供 "Intercepted request / response" 按钮，点击后在 modal 中按需加载（响应默认显示最新 64 KiB 预览），也可以在 modal 里打开完整原文（`?full=1`，新标签页）。临时文件会在 gateway 退出时删除。
+服务端日志使用 `log/slog` 输出为每行一个 JSON 对象：`msg` 是语义化消息（如 `server listening`、`route matched`、`upstream attempt`、`upstream response`），其余信息全部在结构化字段中，并按级别区分 `INFO` / `WARN` / `ERROR`；实时日志通过 `/logs` 的 SSE 推送，保留最近 100 条。
 
 ```bash
 curl http://localhost:8080/chat/completions \

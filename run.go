@@ -3,7 +3,6 @@ package agw
 import (
 	"errors"
 	"flag"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -43,19 +42,24 @@ func Run(args []string) error {
 	if err != nil {
 		return err
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	if invalidPort != "" {
-		logger.Error(fmt.Sprintf("| SERVER | CONFIG_ERROR | invalid PORT %q, using %s", invalidPort, listenDefault), "port", invalidPort)
+		logger.Error("server config error", "port", invalidPort, "fallback", listenDefault)
 	}
 	hub := newLogHub()
 	sessions := newSessionHub()
 	defer sessions.close()
-	logger = slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, hub), nil))
+	logger = slog.New(slog.NewJSONHandler(io.MultiWriter(os.Stderr, hub), nil))
 	client := newHTTPClient(*timeout)
 	proxy := &Proxy{Upstreams: settings.Upstreams, AppSelectors: settings.AppSelectors, Client: client, Logger: logger, Config: configPath, LogHub: hub, Sessions: sessions, Debug: settings.Debug || *debug}
 
-	server := &http.Server{Addr: *listen, Handler: requestLogger(logger, proxy), ReadHeaderTimeout: 10 * time.Second}
-	logger.Info(fmt.Sprintf("| SERVER | LISTEN | addr=%s upstreams=%d debug=%t", *listen, len(settings.Upstreams), proxy.Debug), "addr", *listen, "upstreams", len(settings.Upstreams), "debug", proxy.Debug)
+	server := &http.Server{
+		Addr:              *listen,
+		Handler:           recoverJSON(logger, requestLogger(logger, proxy)),
+		ErrorLog:          slog.NewLogLogger(slog.NewJSONHandler(io.MultiWriter(os.Stderr, hub), nil), slog.LevelError),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	logger.Info("server listening", "addr", *listen, "upstreams", len(settings.Upstreams), "debug", proxy.Debug)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

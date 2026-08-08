@@ -3,11 +3,8 @@ package agw
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
-	"sort"
-	"strings"
-	"time"
+	"runtime/debug"
 )
 
 type accessWriter struct {
@@ -48,7 +45,6 @@ func (w *accessWriter) Flush() {
 
 func requestLogger(logger Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		started := time.Now()
 		proxy, _ := next.(*Proxy)
 		var session *trackedSession
 		if proxy != nil && proxy.Sessions != nil && shouldTrackSession(r) {
@@ -56,7 +52,7 @@ func requestLogger(logger Logger, next http.Handler) http.Handler {
 			r = r.WithContext(context.WithValue(r.Context(), sessionContextKey{}, session))
 		}
 		if loggerProxyDebug(next) {
-			logger.Info(fmt.Sprintf("| REQUEST | HEADERS | %s", formatHeaders(r.Header)))
+			logger.Info("request headers", "headers", headerMap(r.Header))
 		}
 		writer := &accessWriter{ResponseWriter: w}
 		if session != nil {
@@ -70,13 +66,51 @@ func requestLogger(logger Logger, next http.Handler) http.Handler {
 		if session != nil {
 			session.complete(status, writer.bytes, r.Context().Err())
 		}
-		logger.Info(fmt.Sprintf("| %3d | %13v | %15s | %-7s %s | %dB", status, time.Since(started), clientIP(r), r.Method, r.URL.RequestURI(), writer.bytes),
-			"status", status,
-			"duration", time.Since(started).String(),
-			"ip", clientIP(r),
-			"method", r.Method,
-			"path", r.URL.RequestURI(),
-			"bytes", writer.bytes)
+	})
+}
+
+// wroteHeaderWriter tracks whether a response has started so a recovered panic
+// knows whether it can still write a 500, while preserving Flusher support for
+// SSE endpoints.
+type wroteHeaderWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *wroteHeaderWriter) WriteHeader(status int) {
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *wroteHeaderWriter) Write(data []byte) (int, error) {
+	w.wrote = true
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *wroteHeaderWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+// recoverJSON turns any uncaught panic into a structured JSON log line instead
+// of letting the runtime print a raw stack trace to stderr.
+func recoverJSON(logger Logger, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tracker := &wroteHeaderWriter{ResponseWriter: w}
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logger.Error("panic recovered",
+					"error", fmt.Sprint(recovered),
+					"method", r.Method,
+					"path", r.URL.RequestURI(),
+					"stack", string(debug.Stack()))
+				if !tracker.wrote {
+					http.Error(w, "internal server error", http.StatusInternalServerError)
+				}
+			}
+		}()
+		next.ServeHTTP(tracker, r)
 	})
 }
 
@@ -100,28 +134,18 @@ func loggerProxyDebug(next http.Handler) bool {
 	return debug
 }
 
-func formatHeaders(headers http.Header) string {
-	keys := make([]string, 0, len(headers))
-	for key := range headers {
-		keys = append(keys, key)
+// headerMap converts http.Header into a plain map for structured logging:
+// single-valued headers become strings, multi-valued headers stay arrays.
+func headerMap(headers http.Header) map[string]any {
+	structured := make(map[string]any, len(headers))
+	for key, values := range headers {
+		if len(values) == 1 {
+			structured[key] = values[0]
+		} else {
+			structured[key] = values
+		}
 	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys))
-	for _, key := range keys {
-		parts = append(parts, fmt.Sprintf("%s=%q", key, headers.Values(key)))
-	}
-	return strings.Join(parts, " ")
-}
-
-func clientIP(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		return strings.TrimSpace(strings.Split(forwarded, ",")[0])
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return fmt.Sprintf("%s", r.RemoteAddr)
+	return structured
 }
 
 type Logger interface {

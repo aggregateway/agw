@@ -68,7 +68,7 @@ func TestProxyRetriesAndInjectsAuthorization(t *testing.T) {
 			{URL: second.URL, Authorization: &Authorization{Type: "bearer", Value: "backup"}},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 	}
 	req := httptest.NewRequest(http.MethodPost, "/test?x=1", strings.NewReader("payload"))
 	req.Header.Set("Authorization", "Bearer client-must-not-win")
@@ -78,7 +78,7 @@ func TestProxyRetriesAndInjectsAuthorization(t *testing.T) {
 	if recorder.Code != http.StatusCreated || recorder.Body.String() != "ok" {
 		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(logs.String(), "| UPSTREAM[0] | RESPONSE | 502 Bad Gateway") || !strings.Contains(logs.String(), "Invalid URL (GET /v1/asdfasf)") {
+	if !strings.Contains(logs.String(), `"msg":"upstream response"`) || !strings.Contains(logs.String(), `"status":"502 Bad Gateway"`) || !strings.Contains(logs.String(), "Invalid URL (GET /v1/asdfasf)") {
 		t.Fatalf("error response was not logged: %q", logs.String())
 	}
 }
@@ -106,7 +106,7 @@ func TestNonePreservesClientAuthorization(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: server.URL, Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	req.Header.Set("Authorization", "Bearer from-client")
@@ -130,7 +130,7 @@ func TestProxyForwardsCustomMethod(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: server.URL, Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	req := httptest.NewRequest("PURGE", "/resource", strings.NewReader("payload"))
 	recorder := httptest.NewRecorder()
@@ -145,7 +145,7 @@ func TestCORSPreflight(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: "https://example.com", Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	req := httptest.NewRequest(http.MethodOptions, "/resource", nil)
 	req.Header.Set("Access-Control-Request-Method", "PURGE")
@@ -171,7 +171,7 @@ func TestCORSHeadersAreNotDuplicated(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: server.URL, Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	recorder := httptest.NewRecorder()
 	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/resource", nil))
@@ -193,7 +193,7 @@ func TestProxyRequestsUncompressedResponses(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: server.URL, Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	recorder := httptest.NewRecorder()
 	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/resource", nil))
@@ -343,7 +343,7 @@ func TestProxyRoutesByJSONBodyAndForwardsBody(t *testing.T) {
 			{Name: "luna-model", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "gpt"}}}},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -450,7 +450,7 @@ func TestProxyRewritesBodyBeforeForwarding(t *testing.T) {
 			{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek"}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}, {Field: "stream", Value: "true"}}},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}`))
 	request.Header.Set("Content-Type", "application/json")
@@ -827,7 +827,7 @@ func TestProxyRoutesResponsesAPIOnlyToCompatibleUpstream(t *testing.T) {
 			{Name: "responses-api", Match: AppSelectorMatch{Path: []PathMatch{{Operator: "exact", Value: "/v1/responses"}}}},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 
 	recorder := httptest.NewRecorder()
@@ -871,7 +871,7 @@ func TestProxyRoutesByQueryParam(t *testing.T) {
 			{Name: "default"},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 
 	recorder := httptest.NewRecorder()
@@ -931,7 +931,7 @@ func TestProxyRewritesBodyUpdatesContentLength(t *testing.T) {
 			},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	}
 
 	original := `{"model":"deepseek","messages":[]}`
@@ -988,7 +988,7 @@ func TestProxyRetriesWithinMatchedAppSelectorOnly(t *testing.T) {
 			{Name: "deepseek", Match: AppSelectorMatch{Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "DeepSeek"}}}},
 		},
 		Client: http.DefaultClient,
-		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 	}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("payload"))
@@ -997,7 +997,7 @@ func TestProxyRetriesWithinMatchedAppSelectorOnly(t *testing.T) {
 	if recorder.Code != http.StatusOK || recorder.Body.String() != "luna backup" {
 		t.Fatalf("routed response = %d %q", recorder.Code, recorder.Body.String())
 	}
-	if !strings.Contains(logs.String(), "luna-backup | ATTEMPT") || strings.Contains(logs.String(), "ds-video | ATTEMPT") {
+	if !strings.Contains(logs.String(), `"msg":"upstream attempt"`) || !strings.Contains(logs.String(), `"upstream":"luna-backup"`) || strings.Contains(logs.String(), `"upstream":"ds-video"`) {
 		t.Fatalf("retry chain crossed AppSelector boundary: %q", logs.String())
 	}
 }
@@ -1010,7 +1010,7 @@ func TestUpdateConfigChangesRuntimeSettings(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: "https://old.example", Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Config:    configPath,
 	}
 	req := httptest.NewRequest(http.MethodPut, "/config", strings.NewReader(`{"debug":true,"appSelectors":[{"name":"codex","match":{"headers":[{"name":"User-Agent","operator":"regex","value":"^Codex","caseSensitive":true}]}}],"upstreams":[{"url":"https://new.example","appSelectors":["codex"],"authorization":{"type":"none"}}]}`))
@@ -1114,7 +1114,7 @@ func TestProxyInterceptionPreservesSSEStream(t *testing.T) {
 
 	hub := newSessionHub()
 	defer hub.close()
-	proxy := &Proxy{Upstreams: []Upstream{{URL: upstream.URL, Authorization: &Authorization{Type: "none"}}}, Client: http.DefaultClient, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Sessions: hub}
+	proxy := &Proxy{Upstreams: []Upstream{{URL: upstream.URL, Authorization: &Authorization{Type: "none"}}}, Client: http.DefaultClient, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)), Sessions: hub}
 	request := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
 	request.Header.Set("Session-Id", "stream-session")
 	recorder := httptest.NewRecorder()
@@ -1144,7 +1144,7 @@ func TestProxySessionCardShowsAppSelectorAndUpstream(t *testing.T) {
 		Upstreams:    []Upstream{{Name: "d1v.ai", URL: upstream.URL, AppSelectors: []string{"codex-luna"}, Authorization: &Authorization{Type: "none"}}},
 		AppSelectors: []AppSelector{{Name: "codex-luna", Match: AppSelectorMatch{Headers: []HeaderMatch{{Name: "User-Agent", Operator: "contains", Value: "Codex"}}}}},
 		Client:       http.DefaultClient,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Sessions:     hub,
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.6-luna","messages":[]}`))
@@ -1179,7 +1179,7 @@ func TestSessionCardShowsRewrittenModel(t *testing.T) {
 		Upstreams:    []Upstream{{URL: upstream.URL, AppSelectors: []string{"ds"}, Authorization: &Authorization{Type: "none"}}},
 		AppSelectors: []AppSelector{{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek"}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}}}},
 		Client:       http.DefaultClient,
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:       slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Sessions:     hub,
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"deepseek-v4-flash","messages":[]}`))
@@ -1229,7 +1229,7 @@ func TestSessionPayloadFullEndpointReturnsWholeFile(t *testing.T) {
 	full := bytes.Repeat([]byte("x"), 100<<10)
 	tracked.captureResponse(full)
 
-	proxy := &Proxy{Sessions: hub, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	proxy := &Proxy{Sessions: hub, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))}
 	cards := hub.cards()
 
 	recorder := httptest.NewRecorder()
@@ -1248,6 +1248,40 @@ func TestSessionPayloadFullEndpointReturnsWholeFile(t *testing.T) {
 	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/request?full=1", nil))
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("missing request file status = %d, want 404", recorder.Code)
+	}
+}
+
+func TestRecoverJSONLogsPanicAsStructuredJSON(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	handler := recoverJSON(logger, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("boom")
+	}))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/chat/completions", nil))
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", recorder.Code)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+		t.Fatalf("panic log is not valid JSON: %v", err)
+	}
+	if entry["msg"] != "panic recovered" || entry["error"] != "boom" || entry["stack"] == nil {
+		t.Fatalf("panic log = %#v", entry)
+	}
+}
+
+func TestHeaderMapStructured(t *testing.T) {
+	structured := headerMap(http.Header{
+		"User-Agent": []string{"codex/1.0"},
+		"Accept":     []string{"a", "b"},
+	})
+	if structured["User-Agent"] != "codex/1.0" {
+		t.Fatalf("single-valued header = %#v", structured["User-Agent"])
+	}
+	values, ok := structured["Accept"].([]string)
+	if !ok || len(values) != 2 || values[0] != "a" || values[1] != "b" {
+		t.Fatalf("multi-valued header = %#v", structured["Accept"])
 	}
 }
 
@@ -1344,7 +1378,7 @@ func TestSessionRouteShowsTrackedProxyRequest(t *testing.T) {
 	proxy := &Proxy{
 		Upstreams: []Upstream{{URL: upstream.URL, Authorization: &Authorization{Type: "none"}}},
 		Client:    http.DefaultClient,
-		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Logger:    slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Sessions:  hub,
 	}
 	handler := requestLogger(proxy.Logger, proxy)
@@ -1378,25 +1412,5 @@ func TestSessionRouteShowsTrackedProxyRequest(t *testing.T) {
 	proxy.ServeHTTP(responsePayload, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/response", nil))
 	if responsePayload.Code != http.StatusOK || responsePayload.Body.String() != "accepted" {
 		t.Fatalf("response payload response = %d %q", responsePayload.Code, responsePayload.Body.String())
-	}
-}
-
-func TestRequestLoggerUsesGinLikeAccessFormat(t *testing.T) {
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	handler := requestLogger(logger, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte("ok"))
-	}))
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses?stream=true", strings.NewReader("payload"))
-	req.RemoteAddr = "192.0.2.10:1234"
-	recorder := httptest.NewRecorder()
-
-	handler.ServeHTTP(recorder, req)
-	line := logs.String()
-	for _, expected := range []string{"| 201 |", "192.0.2.10", "POST    /v1/responses?stream=true", "| 2B"} {
-		if !strings.Contains(line, expected) {
-			t.Fatalf("access log %q does not contain %q", line, expected)
-		}
 	}
 }

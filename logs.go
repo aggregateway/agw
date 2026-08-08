@@ -1,7 +1,6 @@
 package agw
 
 import (
-	"html"
 	"io"
 	"strings"
 	"sync"
@@ -55,7 +54,7 @@ func (h *logHub) unsubscribe(client chan string) {
 
 func writeSSE(w io.Writer, message string) error {
 	for _, line := range strings.Split(message, "\n") {
-		if _, err := io.WriteString(w, "data: "+html.EscapeString(line)+"\n"); err != nil {
+		if _, err := io.WriteString(w, "data: "+escapeLogLine(line)+"\n"); err != nil {
 			return err
 		}
 	}
@@ -63,4 +62,13 @@ func writeSSE(w io.Writer, message string) error {
 	// keeping successive log entries visually separated in the <pre> element.
 	_, err := io.WriteString(w, "data: \n\n")
 	return err
+}
+
+// escapeLogLine makes log lines safe to insert as HTML text content while
+// keeping quotes intact so JSON-formatted logs stay readable in the feed.
+func escapeLogLine(line string) string {
+	line = strings.ReplaceAll(line, "&", "&amp;")
+	line = strings.ReplaceAll(line, "<", "&lt;")
+	line = strings.ReplaceAll(line, ">", "&gt;")
+	return line
 }
