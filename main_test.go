@@ -1756,10 +1756,16 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("config page Cache-Control = %q, want no-store", got)
 	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<", "data-payload-modal", "data-log-pretty", "data-log-connection", "yaml-config", "data-config-modal", "data-config-yaml", "data-config-yaml-merged", "secrets-config", "data-secrets-modal", "data-secrets-yaml"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-table-head", ">Rules<", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<", "data-payload-modal", "data-log-pretty", "data-log-connection", "yaml-config", "data-config-modal", "data-config-yaml", "data-config-yaml-merged", "secrets-config", "data-secrets-modal", "data-secrets-yaml", "data-session-count", "data-selector-tab-count", "data-upstream-tab-count", "data-log-count", `class="tab-count"`, `class="add-row"`, `id="add-selector"`, `id="routing-tab"`, `id="selectors-tab"`, `data-telemetry-tab="routing"`, `data-telemetry-tab="selectors"`, `id="routing-panel" role="tabpanel" aria-labelledby="routing-tab" hidden`, `id="selectors-panel" role="tabpanel" aria-labelledby="selectors-tab"`, `id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab" hidden`, "viewFromHash", "hashchange", "location.hash"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
 		}
+	}
+	if strings.Count(content, `class="live-dot"`) != 4 {
+		t.Fatalf("all four workspace tabs should carry a live indicator")
+	}
+	if strings.Index(content, `id="selectors-tab"`) > strings.Index(content, `id="routing-tab"`) {
+		t.Fatalf("AppSelector registry should be the first tab")
 	}
 	for _, expected := range []string{"data-rule", "data-rule-type", "rule-kind", "data-add-rule", "data-rule-type-option", `data-rule-type-option="query"`, "data-rule-enabled", "data-rule-delete", "data-rule-empty", "rule-switch"} {
 		if !strings.Contains(content, expected) {
@@ -1774,15 +1780,16 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 	if strings.Contains(content, "data-config-yaml-merged checked") {
 		t.Fatalf("config page must not enable merged YAML display by default")
 	}
-	workspace := strings.Index(content, `aria-labelledby="routing-title"`)
+	routingPanel := strings.Index(content, `id="routing-panel" role="tabpanel" aria-labelledby="routing-tab" hidden`)
+	selectorsPanel := strings.Index(content, `id="selectors-panel" role="tabpanel" aria-labelledby="selectors-tab"`)
 	addUpstream := strings.Index(content, `id="add-upstream"`)
-	if workspace < 0 || addUpstream < workspace {
-		t.Fatalf("upstream add button is outside its routing container")
+	if routingPanel < 0 || selectorsPanel < 0 || addUpstream <= routingPanel || addUpstream >= selectorsPanel {
+		t.Fatalf("upstream add button should live inside the routing panel")
 	}
-	routingEnd := strings.Index(content[workspace:], "</section>")
-	selectorWorkspace := strings.Index(content, `class="workspace selector-workspace"`)
-	if routingEnd < 0 || selectorWorkspace < 0 || selectorWorkspace <= workspace+routingEnd {
-		t.Fatalf("AppSelector registry is still nested in the upstream routing container")
+	tabbarStart := strings.Index(content, `class="telemetry-tabbar"`)
+	tabbarEnd := strings.Index(content[tabbarStart:], "</div>")
+	if tabbarStart < 0 || tabbarEnd < 0 || addUpstream <= tabbarStart+tabbarEnd {
+		t.Fatalf("add-upstream should live inside a panel below the tab bar: start=%d end=%d add=%d", tabbarStart, tabbarEnd, addUpstream)
 	}
 }
 

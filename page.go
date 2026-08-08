@@ -41,7 +41,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     body { margin: 0; color: #1b2927; background: #eef2f0; }
     button, input, select { font: inherit; }
     .shell { width: min(1220px, calc(100% - 40px)); margin: 28px auto 40px; }
-    .appbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 20px; color: #f4f9f7; background: #12312d; border: 1px solid #20473f; border-radius: 8px 8px 0 0; }
+    .appbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 18px 20px; color: #f4f9f7; background: #12312d; border: 1px solid #20473f; border-radius: 8px; }
     .identity { display: flex; align-items: center; gap: 12px; min-width: 0; }
     .brand-mark { display: grid; width: 34px; height: 34px; place-items: center; flex: 0 0 34px; color: #17302b; background: #cbe86b; border-radius: 6px; font-size: 12px; font-weight: 800; letter-spacing: 0; }
     .eyebrow { margin: 0 0 2px; color: #9ebcb5; font-size: 11px; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
@@ -63,14 +63,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .icon-button.danger:hover { color: #862f2f; background: #fff1f0; border-color: #e3aaa5; }
     .icon-button:disabled { opacity: .38; cursor: not-allowed; }
     .icon-button:disabled:hover { color: inherit; background: inherit; border-color: inherit; }
-    .workspace { background: #fff; border: 1px solid #d7e0dc; border-top: 0; border-radius: 0 0 8px 8px; box-shadow: 0 12px 28px rgba(24, 44, 39, .06); }
-    .selector-workspace { margin-top: 20px; border-top: 1px solid #d7e0dc; border-radius: 8px; }
-    .workspace-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; border-bottom: 1px solid #e5ece9; }
-    .section-title { margin: 0; color: #213633; font-size: 15px; font-weight: 700; }
-    .section-note { margin: 3px 0 0; color: #71827e; font-size: 12px; }
-    .section-actions { display: flex; align-items: center; gap: 10px; }
-    .summary { display: flex; align-items: center; gap: 8px; color: #53716a; font-size: 12px; white-space: nowrap; }
-    .summary-dot { width: 7px; height: 7px; background: #7fae33; border-radius: 50%; }
+    .add-row { display: flex; width: 100%; min-height: 40px; align-items: center; justify-content: center; gap: 6px; padding: 8px; color: #53716a; background: transparent; border: 1px dashed #c9d6d1; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 700; }
+    .add-row:hover { color: #176d59; background: #f2f8f5; border-color: #8fb7aa; }
+    .add-row svg { width: 15px; height: 15px; }
+    tfoot .add-row-cell { padding: 2px 2px 8px; }
     #status { min-width: 72px; color: #637570; font-size: 12px; text-align: right; }
     #status.error { color: #a83e3e; }
     #status.success { color: #267d63; }
@@ -180,7 +176,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .logs-title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 700; }
     .live-dot { width: 7px; height: 7px; background: #b9e55a; border-radius: 50%; box-shadow: 0 0 0 3px rgba(185, 229, 90, .12); }
     .logs-meta { color: #9db5ae; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #log-stream { height: 250px; overflow: auto; padding: 14px; margin: 0; color: #c6d8d2; background: #13211f; white-space: pre-wrap; word-break: break-word; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    #log-stream { height: min(60vh, 560px); min-height: 320px; overflow: auto; padding: 14px; margin: 0; color: #c6d8d2; background: #13211f; white-space: pre-wrap; word-break: break-word; font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     #log-stream::selection { color: #13211f; background: #cbe86b; }
     .log-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: #f7faf8; border-bottom: 1px solid #e5ece9; }
     .log-toolbar .text-button.is-active { color: #3f8b73; }
@@ -192,6 +188,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .telemetry-tab:focus-visible { outline: 2px solid #62a58d; outline-offset: 1px; }
     .telemetry-panel[hidden] { display: none; }
     .tab-connection { color: #7c918a; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .tab-count { min-width: 20px; height: 18px; padding: 0 6px; display: inline-grid; place-items: center; color: #2e5b51; background: rgba(46, 91, 81, .10); border-radius: 9px; font: 700 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
     .session-journal { margin-top: 20px; overflow: hidden; background: #fff; border: 1px solid #d7e0dc; border-radius: 8px; box-shadow: 0 10px 24px rgba(24, 44, 39, .04); }
     .journal-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #e5ece9; }
     .journal-title { margin: 0; color: #213633; font-size: 15px; font-weight: 700; }
@@ -275,10 +272,9 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .session-empty { padding: 28px; color: #7b8b87; font-size: 13px; text-align: center; }
     :root[data-theme="dark"] body { color: #dbe7e2; background: #0d1513; }
     :root[data-theme="dark"] .appbar { background: #112522; border-color: #294740; }
-    :root[data-theme="dark"] .workspace, :root[data-theme="dark"] .telemetry { background: #14201d; border-color: #2b403a; box-shadow: 0 14px 30px rgba(0, 0, 0, .2); }
-    :root[data-theme="dark"] .workspace-top { border-color: #293d38; }
-    :root[data-theme="dark"] .section-title { color: #e3ede9; }
-    :root[data-theme="dark"] .section-note, :root[data-theme="dark"] .summary { color: #8fa59e; }
+    :root[data-theme="dark"] .telemetry { background: #14201d; border-color: #2b403a; box-shadow: 0 14px 30px rgba(0, 0, 0, .2); }
+    :root[data-theme="dark"] .add-row { color: #8fa59e; border-color: #405750; }
+    :root[data-theme="dark"] .add-row:hover { color: #d4e8df; background: #1a2a26; border-color: #638d7f; }
     :root[data-theme="dark"] .icon-button { color: #b4c8c1; background: #1b2b27; border-color: #395047; }
     :root[data-theme="dark"] .icon-button:hover { color: #d4e8df; background: #253a34; border-color: #638d7f; }
     :root[data-theme="dark"] .icon-button.save { color: #17372f; background: #cbe86b; border-color: #cbe86b; }
@@ -308,7 +304,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .telemetry-tab:hover { color: #d2e3dc; background: #172923; }
     :root[data-theme="dark"] .telemetry-tab[aria-selected="true"] { color: #e7f0ec; background: #14201d; border-color: #2b403a; box-shadow: none; }
     :root[data-theme="dark"] .tab-connection { color: #78958a; }
-    :root[data-theme="dark"] .selector-workspace { border-color: #2b403a; }
+    :root[data-theme="dark"] .tab-count { color: #b9e55a; background: rgba(185, 229, 90, .12); }
     :root[data-theme="dark"] .selector-table-head { color: #94aaa2; background: #101a17; }
     :root[data-theme="dark"] .selector-row { background: #172622; border-color: #30463f; }
     :root[data-theme="dark"] .selector-row:hover { background: #1a2a26; }
@@ -345,7 +341,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .is-warning { color: #f0c466; background: #453719; }
     :root[data-theme="dark"] .is-error { color: #f3aaa6; background: #48292a; }
     :root[data-theme="dark"] .session-empty { color: #8ba198; }
-    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-workspace { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-table-head { display: none; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .session-selector, .session-upstream, .session-model { display: none; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
+    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-table-head { display: none; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .session-selector, .session-upstream, .session-model { display: none; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
     @media (max-width: 760px) { .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr); } }
   </style>
 </head>
@@ -369,32 +365,26 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         <button class="icon-button save" type="button" id="save" title="保存配置" aria-label="保存配置"><i data-lucide="save"></i></button>
       </div>
     </header>
-    <section class="workspace" aria-labelledby="routing-title">
-      <div class="workspace-top">
-        <div><h2 class="section-title" id="routing-title">Upstream routing</h2><p class="section-note">按显示顺序重试，拖动行可调整优先级</p></div>
-        <div class="section-actions"><div class="summary"><span class="summary-dot"></span><span id="upstream-count">加载中</span></div><button class="icon-button" type="button" id="add-upstream" title="新增上游" aria-label="新增上游"><i data-lucide="plus"></i></button></div>
-      </div>
+    <section class="telemetry" aria-labelledby="workspace-title">
+      <h2 class="sr-only" id="workspace-title">Workspace</h2>
+      <div class="telemetry-tabbar" role="tablist" aria-label="工作区视图"><button class="telemetry-tab" type="button" role="tab" id="selectors-tab" aria-selected="true" aria-controls="selectors-panel" data-telemetry-tab="selectors"><span class="live-dot"></span><span>AppSelector registry</span><span class="tab-count" data-selector-tab-count>0</span></button><button class="telemetry-tab" type="button" role="tab" id="routing-tab" aria-selected="false" aria-controls="routing-panel" data-telemetry-tab="routing"><span class="live-dot"></span><span>Upstream routing</span><span class="tab-count" data-upstream-tab-count>0</span></button><button class="telemetry-tab" type="button" role="tab" id="sessions-tab" aria-selected="false" aria-controls="sessions-panel" data-telemetry-tab="sessions"><span class="live-dot"></span><span>Session journal</span><span class="tab-count" data-session-count>0</span></button><button class="telemetry-tab" type="button" role="tab" id="logs-tab" aria-selected="false" aria-controls="logs-panel" data-telemetry-tab="logs"><span class="live-dot"></span><span>Live request feed</span><span class="tab-count" data-log-count>0</span></button></div>
+      <div class="telemetry-panel" id="routing-panel" role="tabpanel" aria-labelledby="routing-tab" hidden>
       <div class="table-scroll">
         <table>
           <thead><tr><th class="priority" scope="col">优先级</th><th class="name" scope="col">Name</th><th class="endpoint" scope="col">Upstream endpoint</th><th class="authentication" scope="col">Authentication</th><th class="app-selectors" scope="col">Compatible AppSelectors</th><th class="row-actions" scope="col">Actions</th></tr></thead>
           <tbody id="config-table" data-drop-zone hx-get="/config" hx-trigger="load" hx-swap="innerHTML"><tr><td colspan="6">正在加载上游配置...</td></tr></tbody>
+          <tfoot><tr><td colspan="6" class="add-row-cell"><button class="add-row" type="button" id="add-upstream" title="新增上游" aria-label="新增上游"><i data-lucide="plus"></i>添加 upstream</button></td></tr></tfoot>
         </table>
       </div>
-    </section>
-    <section class="workspace selector-workspace" aria-labelledby="selector-config-title">
-      <div class="workspace-top">
-        <div><h2 class="section-title" id="selector-config-title">AppSelector registry</h2><p class="section-note">按顺序匹配 request path、header 与 JSON body 字段；首个命中的 selector 决定后续 upstream retry 链。规则可单独启用 / 禁用，便于调试。</p></div>
-        <div class="section-actions"><div class="summary"><span class="summary-dot"></span><span id="selector-count">加载中</span></div><button class="icon-button" type="button" id="add-selector" title="新增 AppSelector" aria-label="新增 AppSelector"><i data-lucide="plus"></i></button></div>
       </div>
+      <div class="telemetry-panel" id="selectors-panel" role="tabpanel" aria-labelledby="selectors-tab">
       <div class="selector-table-head" role="row"><span>AppSelector</span><span>Rules</span><span>Actions</span></div>
       <div id="selector-list" class="selector-list" data-drop-zone>
         {{range .AppSelectors}}<div class="selector-row" data-selector data-draggable draggable="true"><div class="selector-name-cell"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span><input class="field-input" data-selector-name value="{{.Name}}" placeholder="selector name" aria-label="AppSelector 名称"></div><div class="selector-matches selector-rules" data-selector-rules>{{range .Match.Path}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="path" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">path</span><div class="rule-controls rule-controls-path"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="/v1/chat/completions" aria-label="匹配路径"{{if eq .Operator "present"}} disabled{{end}}></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Headers}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="header" data-case-sensitive="{{.CaseSensitive}}" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">header</span><div class="rule-controls rule-controls-header"><input class="field-input" data-rule-name value="{{.Name}}" placeholder="User-Agent" aria-label="匹配 header"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button></span></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Body}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="body" data-case-sensitive="{{.CaseSensitive}}" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">body</span><div class="rule-controls rule-controls-body"><input class="field-input" data-rule-name value="{{.Field}}" placeholder="model" aria-label="JSON 字段"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button></span></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Match.Query}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="query" data-case-sensitive="{{.CaseSensitive}}" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">query</span><div class="rule-controls rule-controls-query"><input class="field-input" data-rule-name value="{{.Name}}" placeholder="api-version" aria-label="匹配 query 参数"><select class="auth-select" data-rule-operator aria-label="匹配方式"><option value="exact"{{if eq .Operator "exact"}} selected{{end}}>exact</option><option value="prefix"{{if eq .Operator "prefix"}} selected{{end}}>prefix</option><option value="contains"{{if eq .Operator "contains"}} selected{{end}}>contains</option><option value="regex"{{if eq .Operator "regex"}} selected{{end}}>regex</option><option value="present"{{if eq .Operator "present"}} selected{{end}}>present</option></select><span class="match-value-field"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="匹配值" aria-label="匹配值"{{if eq .Operator "present"}} disabled{{end}}><span class="match-value-actions"><button class="icon-button match-case-toggle{{if .CaseSensitive}} is-active{{end}}" type="button" data-toggle-case title="区分大小写" aria-label="区分大小写" aria-pressed="{{.CaseSensitive}}"><i data-lucide="case-sensitive"></i></button></span></span></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}{{range .Rewrite}}<div class="rule{{if not .RuleEnabled}} is-disabled{{end}}" data-rule data-rule-type="rewrite" data-enabled="{{if .RuleEnabled}}true{{else}}false{{end}}"><span class="rule-kind">rewrite</span><div class="rule-controls rule-controls-rewrite"><input class="field-input" data-rule-name value="{{.Field}}" placeholder="model" aria-label="要重写的字段"><input class="field-input" data-rule-value value="{{.Value}}" placeholder="gpt-5.6-luna" aria-label="重写后的值"></div><label class="rule-switch" title="启用 / 禁用规则"><input type="checkbox" data-rule-enabled{{if .RuleEnabled}} checked{{end}} aria-label="启用规则"><span></span></label><button class="icon-button rule-clear" type="button" data-rule-delete title="删除规则" aria-label="删除规则"><i data-lucide="x"></i></button></div>{{end}}<div class="selector-no-rules" data-rule-empty{{if .HasRules}} hidden{{end}}>No rules - matches all requests</div><div class="rule-add"><button class="text-button" type="button" data-add-rule title="添加规则" aria-label="添加规则"><i data-lucide="plus"></i>添加规则</button><div class="rule-menu" data-rule-menu hidden role="menu" aria-label="规则类型"><button type="button" data-rule-type-option="path">Path</button><button type="button" data-rule-type-option="header">Header</button><button type="button" data-rule-type-option="body">Body</button><button type="button" data-rule-type-option="query">Query</button><button type="button" data-rule-type-option="rewrite">Rewrite</button></div></div></div><div class="selector-actions"><button class="icon-button danger" type="button" data-delete-selector title="删除 AppSelector" aria-label="删除 AppSelector"><i data-lucide="trash-2"></i></button></div></div>{{else}}<div class="selector-empty">暂无 AppSelector；未配置 selector 时保持原有 upstream 顺序。</div>{{end}}
+        <button class="add-row" type="button" id="add-selector" title="新增 AppSelector" aria-label="新增 AppSelector"><i data-lucide="plus"></i>添加 AppSelector</button>
       </div>
-    </section>
-    <section class="telemetry" aria-labelledby="telemetry-title">
-      <h2 class="sr-only" id="telemetry-title">Telemetry</h2>
-      <div class="telemetry-tabbar" role="tablist" aria-label="观测视图"><button class="telemetry-tab" type="button" role="tab" id="sessions-tab" aria-selected="true" aria-controls="sessions-panel" data-telemetry-tab="sessions">Session journal</button><button class="telemetry-tab" type="button" role="tab" id="logs-tab" aria-selected="false" aria-controls="logs-panel" data-telemetry-tab="logs"><span class="live-dot"></span><span>Live request feed</span><span class="tab-connection">SSE connected</span></button></div>
-      <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab"><div class="session-table-head" role="row"><span></span><span>Session</span><span>Selector</span><span>Upstream</span><span>Model</span><span>State</span><span>Status</span><span>Transfer</span><span>Duration</span><span></span></div><div id="session-list" class="session-list"></div></div>
+      </div>
+      <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab" hidden><div class="session-table-head" role="row"><span></span><span>Session</span><span>Selector</span><span>Upstream</span><span>Model</span><span>State</span><span>Status</span><span>Transfer</span><span>Duration</span><span></span></div><div id="session-list" class="session-list"></div></div>
       <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><div class="log-toolbar"><span class="tab-connection" data-log-connection>SSE connected</span><button class="text-button" type="button" data-log-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i>pretty</button></div><pre id="log-stream"></pre></div>
     </section>
   </main>
@@ -458,7 +448,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     let dragged, dragContainer, dropIndicator, dragGhost;
     function renderIcons(scope) { if (window.lucide) window.lucide.createIcons({root: scope || document, attrs: {'stroke-width': 1.8}}); }
     function setTheme(theme) { document.documentElement.dataset.theme = theme; try { localStorage.setItem('agw-theme', theme); } catch (_) {} const isDark = theme === 'dark'; themeToggle.title = isDark ? '切换到浅色主题' : '切换到深色主题'; themeToggle.setAttribute('aria-label', themeToggle.title); themeToggle.innerHTML = '<i data-lucide="' + (isDark ? 'sun' : 'moon') + '"></i>'; renderIcons(themeToggle); }
-    function setTelemetryView(view, focus) { document.querySelectorAll('[data-telemetry-tab]').forEach(tab => { const active = tab.dataset.telemetryTab === view; tab.setAttribute('aria-selected', String(active)); document.getElementById(tab.getAttribute('aria-controls')).hidden = !active; if (active && focus) tab.focus(); }); }
+    function applyTelemetryView(view, focus) { document.querySelectorAll('[data-telemetry-tab]').forEach(tab => { const active = tab.dataset.telemetryTab === view; tab.setAttribute('aria-selected', String(active)); document.getElementById(tab.getAttribute('aria-controls')).hidden = !active; if (active && focus) tab.focus(); }); }
+    function viewFromHash() { const name = location.hash.replace(/^#/, ''); return [...document.querySelectorAll('[data-telemetry-tab]')].some(tab => tab.dataset.telemetryTab === name) ? name : ''; }
+    function setTelemetryView(view, focus) { applyTelemetryView(view, focus); if (location.hash !== '#' + view) location.hash = view; }
+    window.addEventListener('hashchange', function () { const view = viewFromHash(); if (view) applyTelemetryView(view); });
     function copyText(text) {
       if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
       return new Promise(function (resolve, reject) {
@@ -817,10 +810,12 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       sessionList.querySelectorAll('.session-card').forEach(card => { if (!incomingIds.has(card.dataset.sessionId)) card.remove(); });
       const empty = sessionList.querySelector('.session-empty');
       if (incoming.length) { if (empty) empty.remove(); }
-      else if (!sessionList.querySelector('.session-card')) { const el = doc.querySelector('.session-empty'); if (el) sessionList.append(el); }
+      else if (!sessionList.querySelector('.session-card') && !empty) { const el = doc.querySelector('.session-empty'); if (el) sessionList.append(el); }
+      const count = document.querySelector('[data-session-count]');
+      if (count) count.textContent = String(incoming.length);
     }
-    function updateSummary() { document.getElementById('upstream-count').textContent = table.querySelectorAll('tr[data-row]').length + ' upstreams'; }
-    function updateSelectorSummary() { document.getElementById('selector-count').textContent = selectorList.querySelectorAll('[data-selector]').length + ' selectors'; }
+    function updateSummary() { const count = table.querySelectorAll('tr[data-row]').length; const tabCount = document.querySelector('[data-upstream-tab-count]'); if (tabCount) tabCount.textContent = String(count); }
+    function updateSelectorSummary() { const count = selectorList.querySelectorAll('[data-selector]').length; const tabCount = document.querySelector('[data-selector-tab-count]'); if (tabCount) tabCount.textContent = String(count); }
     function ensureDuplicateButtons(scope) { scope.querySelectorAll('tr[data-row]').forEach(row => { const actions = row.querySelector('.row-actions'); if (!actions || actions.querySelector('[data-duplicate-row]')) return; const remove = actions.querySelector('[data-delete-row]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-row title="复制 upstream" aria-label="复制 upstream"><i data-lucide="copy"></i></button>'); }); scope.querySelectorAll('[data-selector]').forEach(row => { const actions = row.querySelector('.selector-actions'); if (!actions || actions.querySelector('[data-duplicate-selector]')) return; const remove = actions.querySelector('[data-delete-selector]'); remove.insertAdjacentHTML('beforebegin', '<button class="icon-button" type="button" data-duplicate-selector title="复制 AppSelector" aria-label="复制 AppSelector"><i data-lucide="copy"></i></button>'); }); }
     function newRow() { return '<tr data-row draggable="true"><td class="priority"><span class="drag-handle" title="拖动排序"><i data-lucide="grip-vertical"></i></span></td><td><input class="field-input" data-name value="" placeholder="名称" aria-label="上游名称"></td><td><input class="field-input" data-url value="https://example.com/v1" aria-label="上游地址"></td><td><div class="auth"><select class="auth-select" data-auth-type aria-label="认证类型"><option value="none" selected>none</option><option value="basic">basic</option><option value="bearer">bearer</option></select><span class="auth-value"><input class="field-input" data-auth-value type="password" value="" aria-label="认证值"></span><button class="icon-button" type="button" data-toggle-password title="显示认证值" aria-label="显示认证值"><i data-lucide="eye"></i></button></div></td><td class="app-selectors"><div class="multi-select" data-multi-select><input type="hidden" data-app-selectors value=""><div class="ms-trigger" data-ms-trigger role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false" aria-label="兼容的 AppSelector"><span class="ms-chips" data-ms-chips></span><i data-lucide="chevron-down" class="ms-chevron"></i></div><div class="ms-menu" data-ms-menu hidden role="listbox" aria-multiselectable="true"></div></div></td><td class="row-actions"><button class="icon-button danger" type="button" data-delete-row title="删除上游" aria-label="删除上游"><i data-lucide="trash-2"></i></button></td></tr>'; }
     function registeredSelectorNames() { return [...selectorList.querySelectorAll('[data-selector]')].map(row => row.querySelector('[data-selector-name]').value.trim()).filter(Boolean); }
@@ -1122,6 +1117,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       logLines.push(line);
       if (logLines.length > 500) logLines.splice(0, logLines.length - 500);
       appendLogText(logPretty.classList.contains('is-active') ? formatLogLine(line) : line);
+      const logCount = document.querySelector('[data-log-count]');
+      if (logCount) logCount.textContent = String(logLines.length);
     }
     const logEvents = new EventSource('/logs');
     logEvents.onmessage = event => { if (event.data) appendLogLine(event.data); };
@@ -1145,6 +1142,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       }, 80);
     });
     setTheme(document.documentElement.dataset.theme || 'dark');
+    const initialView = viewFromHash();
+    if (initialView) applyTelemetryView(initialView);
     updateSelectorSummary(); ensureDuplicateButtons(document); renderMultiSelect(document); applyLocalSecrets(table); renderIcons(document);
     // Unlock the gateway from the browser's own secrets (write-only injection);
     // the server never reads secrets back to us.
