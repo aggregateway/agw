@@ -1063,8 +1063,8 @@ func TestSessionHubTracksLifecycleAndRedactsHeaders(t *testing.T) {
 	if strings.Contains(content, "data: hello") || strings.Contains(content, "request-body-") {
 		t.Fatalf("session card embeds payload data: %s", content)
 	}
-	if !strings.Contains(content, `data-session-payload="request"`) || !strings.Contains(content, `data-session-payload="response"`) {
-		t.Fatalf("session card does not include payload loaders: %s", content)
+	if !strings.Contains(content, `data-session-payload="request"`) || !strings.Contains(content, `data-session-payload="response"`) || !strings.Contains(content, "data-payload-full") || !strings.Contains(content, "data-payload-toggle") || !strings.Contains(content, "is-collapsed") {
+		t.Fatalf("session card does not include collapsed payload loaders or the full-file button: %s", content)
 	}
 	if !strings.Contains(content, `<span class="session-metric session-transfer"><small>latest transfer</small><strong>2.0 KB</strong></span>`) {
 		t.Fatalf("session card does not include the latest transfer summary: %s", content)
@@ -1158,8 +1158,11 @@ func TestProxySessionCardShowsAppSelectorAndUpstream(t *testing.T) {
 	if !strings.Contains(content, "codex-luna") || !strings.Contains(content, "UPSTREAM[0:d1v.ai]") {
 		t.Fatalf("session card route details missing: %s", content)
 	}
-	if !strings.Contains(content, `class="session-model">gpt-5.6-luna<`) {
+	if !strings.Contains(content, `class="session-cell session-model">gpt-5.6-luna<`) {
 		t.Fatalf("session card does not show the request model: %s", content)
+	}
+	if !strings.Contains(content, `class="session-cell session-selector">codex-luna<`) || !strings.Contains(content, `class="session-cell session-upstream">UPSTREAM[0:d1v.ai]<`) {
+		t.Fatalf("session card does not put selector/upstream in their own columns: %s", content)
 	}
 }
 
@@ -1187,10 +1190,10 @@ func TestSessionCardShowsRewrittenModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(content, `class="session-model">deepseek-v4-flash =&gt; gpt-5.6-luna<`) {
+	if !strings.Contains(content, `class="session-cell session-model">deepseek-v4-flash =&gt; gpt-5.6-luna<`) {
 		t.Fatalf("session card does not show the original => rewritten model: %s", content)
 	}
-	if strings.Contains(content, `class="session-model">deepseek-v4-flash<`) {
+	if strings.Contains(content, `class="session-cell session-model">deepseek-v4-flash<`) {
 		t.Fatalf("session card hides the rewrite: %s", content)
 	}
 }
@@ -1217,14 +1220,48 @@ func TestSessionResponsePayloadReadsLatestDiskBytes(t *testing.T) {
 	}
 }
 
+func TestSessionPayloadFullEndpointReturnsWholeFile(t *testing.T) {
+	hub := newSessionHub()
+	defer hub.close()
+	request := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	tracked := hub.start(request)
+	tracked.setContentType("text/plain")
+	full := bytes.Repeat([]byte("x"), 100<<10)
+	tracked.captureResponse(full)
+
+	proxy := &Proxy{Sessions: hub, Logger: log.New(io.Discard, "", 0)}
+	cards := hub.cards()
+
+	recorder := httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/response?full=1", nil))
+	if recorder.Code != http.StatusOK || !bytes.Equal(recorder.Body.Bytes(), full) {
+		t.Fatalf("full payload = %d bytes, want %d (status %d)", recorder.Body.Len(), len(full), recorder.Code)
+	}
+
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/response", nil))
+	if recorder.Code != http.StatusOK || recorder.Body.Len() != 64<<10 {
+		t.Fatalf("preview tail length = %d, want %d (status %d)", recorder.Body.Len(), 64<<10, recorder.Code)
+	}
+
+	recorder = httptest.NewRecorder()
+	proxy.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/sessions/"+cards[0].ID+"/request?full=1", nil))
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing request file status = %d, want 404", recorder.Code)
+	}
+}
+
 func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), nil, false)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("config page status = %d", recorder.Code)
 	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("config page Cache-Control = %q, want no-store", got)
+	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", ">Rules<", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector", "session-table-head", ">Selector<", ">Upstream<", ">Model<", ">Transfer<", ">Duration<"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
 		}

@@ -125,18 +125,21 @@ var sessionCardsTemplate = template.Must(template.New("session-cards").Parse(`{{
 <article class="session-card" data-session-id="{{.ID}}">
   <button class="session-summary" type="button" data-session-toggle aria-expanded="false">
     <span class="session-indicator {{.StateClass}}"></span>
-    <span class="session-primary"><span class="session-path"><b>{{.Latest.Method}}</b> {{.Latest.Path}}</span><span class="session-id">{{.ShortID}} · {{.Started}}</span>{{if .Latest.Upstream}}<span class="session-route">{{if .Latest.AppSelector}}{{.Latest.AppSelector}} / {{end}}{{.Latest.Upstream}}</span>{{end}}{{if .Latest.Model}}<span class="session-model">{{.Latest.Model}}</span>{{end}}</span>
+    <span class="session-primary"><span class="session-path"><b>{{.Latest.Method}}</b> {{.Latest.Path}}</span><span class="session-id">{{.ShortID}} · {{.Started}}</span></span>
+    <span class="session-cell session-selector">{{if .Latest.AppSelector}}{{.Latest.AppSelector}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
+    <span class="session-cell session-upstream">{{if .Latest.Upstream}}{{.Latest.Upstream}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
+    <span class="session-cell session-model">{{if .Latest.Model}}{{.Latest.Model}}{{else}}<span class="session-empty-cell">—</span>{{end}}</span>
     <span class="session-state {{.StateClass}}">{{.State}}</span>
-    <span class="session-metric"><small>status</small><strong>{{.Status}}</strong></span>
+    <span class="session-metric session-status"><small>status</small><strong>{{.Status}}</strong></span>
     <span class="session-metric session-transfer"><small>latest transfer</small><strong>{{.Latest.Bytes}}</strong></span>
-    <span class="session-metric"><small>duration</small><strong>{{.Duration}}</strong></span>
+    <span class="session-metric session-duration"><small>duration</small><strong>{{.Duration}}</strong></span>
     <i data-lucide="chevron-down" class="session-chevron"></i>
   </button>
   <div class="session-details" hidden>
     <div class="session-overview"><span><small>App selector</small><strong>{{.Latest.AppSelector}}</strong></span><span><small>Model</small><strong>{{.Latest.Model}}</strong></span><span><small>Upstream</small><strong>{{.Latest.Upstream}}</strong></span><span><small>Connection</small><strong class="{{.StateClass}}">{{.State}}</strong></span><span><small>Requests</small><strong>{{.RequestCount}}</strong></span><span><small>Latest transfer</small><strong>{{.Latest.Bytes}}</strong></span><span><small>Latest duration</small><strong>{{.Latest.Duration}}</strong></span></div>
     <section class="session-headers"><h3>Latest request headers</h3><dl class="header-list">{{range .Latest.Headers}}<div><dt>{{.Name}}</dt><dd>{{.Value}}</dd></div>{{else}}<div><dt>Headers</dt><dd>unavailable</dd></div>{{end}}</dl></section>
-    {{if .Latest.HasRequestBody}}<section class="payload-preview request-preview"><div class="payload-preview-head"><h3>Intercepted request</h3><span class="payload-meta">{{.Latest.RequestContentType}} · {{.Latest.RequestBytes}}</span><span class="payload-actions"><button class="icon-button" type="button" data-payload-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button><button class="icon-button" type="button" data-payload-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button></span></div><pre data-session-payload="request"></pre></section>{{end}}
-    {{if .Latest.HasResponseBody}}<section class="payload-preview response-preview"><div class="payload-preview-head"><h3>Intercepted response</h3><span class="payload-meta">{{.Latest.ContentType}} · {{.Latest.ResponseBytes}} · live tail</span><span class="payload-actions"><button class="icon-button" type="button" data-payload-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button><button class="icon-button" type="button" data-payload-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button></span></div><pre data-session-payload="response"></pre></section>{{end}}
+    {{if .Latest.HasRequestBody}}<section class="payload-preview request-preview is-collapsed"><div class="payload-preview-head" data-payload-toggle role="button" tabindex="0" aria-expanded="false"><i data-lucide="chevron-down" class="payload-toggle-chevron"></i><h3>Intercepted request</h3><span class="payload-meta">{{.Latest.RequestContentType}} · {{.Latest.RequestBytes}}</span><span class="payload-actions"><button class="icon-button" type="button" data-payload-full title="查看完整内容" aria-label="查看完整内容"><i data-lucide="file-text"></i></button><button class="icon-button" type="button" data-payload-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button><button class="icon-button" type="button" data-payload-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button></span></div><pre data-session-payload="request"></pre></section>{{end}}
+    {{if .Latest.HasResponseBody}}<section class="payload-preview response-preview is-collapsed"><div class="payload-preview-head" data-payload-toggle role="button" tabindex="0" aria-expanded="false"><i data-lucide="chevron-down" class="payload-toggle-chevron"></i><h3>Intercepted response</h3><span class="payload-meta">{{.Latest.ContentType}} · {{.Latest.ResponseBytes}} · live tail</span><span class="payload-actions"><button class="icon-button" type="button" data-payload-full title="查看完整内容" aria-label="查看完整内容"><i data-lucide="file-text"></i></button><button class="icon-button" type="button" data-payload-pretty title="格式化 JSON" aria-label="格式化 JSON" aria-pressed="false"><i data-lucide="braces"></i></button><button class="icon-button" type="button" data-payload-copy title="复制" aria-label="复制"><i data-lucide="copy"></i></button></span></div><pre data-session-payload="response"></pre></section>{{end}}
     <section class="session-events"><h3>Gateway events</h3><ol class="gateway-events">{{range .Latest.Events}}<li><time>{{.At}}</time><span class="gateway-event-kind">{{.Kind}}</span><span>{{.Detail}}</span></li>{{else}}<li class="gateway-events-empty">Waiting for upstream activity</li>{{end}}</ol></section>
   </div>
 </article>{{else}}<div class="session-empty">暂无 API 会话。新的请求会实时出现在这里。</div>{{end}}`))
@@ -404,6 +407,22 @@ func (h *sessionHub) readPayload(sessionID, kind string, tail int64) ([]byte, bo
 	return data, true, err
 }
 
+// payloadInfo resolves the on-disk payload file for a session and the content
+// type recorded for it.
+func (h *sessionHub) payloadInfo(sessionID, kind string) (path, contentType string, found bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	record := h.records[sessionID]
+	if record == nil || len(record.Requests) == 0 {
+		return "", "", false
+	}
+	request := record.Requests[len(record.Requests)-1]
+	if kind == "response" {
+		return request.ResponsePath, request.ContentType, request.ResponsePath != ""
+	}
+	return request.RequestPath, request.RequestContentType, request.RequestPath != ""
+}
+
 func (h *sessionHub) subscribe() chan struct{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -448,6 +467,7 @@ func (p *Proxy) serveSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/sessions" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
 		content, err := p.Sessions.renderCards()
 		if err != nil {
 			http.Error(w, "failed to render sessions", http.StatusInternalServerError)
@@ -488,6 +508,22 @@ func (p *Proxy) serveSessionPayload(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/sessions/"), "/")
 	if len(parts) != 2 || (parts[1] != "request" && parts[1] != "response") {
 		http.NotFound(w, r)
+		return
+	}
+	// ?full=1 streams the complete on-disk payload instead of the preview
+	// tail, so the whole response can be inspected without loading it on every
+	// live refresh.
+	if r.URL.Query().Get("full") == "1" {
+		path, contentType, found := p.Sessions.payloadInfo(parts[0], parts[1])
+		if !found {
+			http.NotFound(w, r)
+			return
+		}
+		if contentType == "" {
+			contentType = "text/plain; charset=utf-8"
+		}
+		w.Header().Set("Content-Type", contentType)
+		http.ServeFile(w, r, path)
 		return
 	}
 	var tail int64

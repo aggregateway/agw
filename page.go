@@ -184,9 +184,11 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .journal-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #e5ece9; }
     .journal-title { margin: 0; color: #213633; font-size: 15px; font-weight: 700; }
     .journal-note { margin: 3px 0 0; color: #71827e; font-size: 12px; }
+    .session-table-head { display: grid; grid-template-columns: 8px minmax(200px, 1.4fr) minmax(84px, .7fr) minmax(104px, .8fr) minmax(84px, .8fr) 64px 48px 86px 86px 18px; align-items: center; gap: 12px; padding: 8px 24px; color: #778984; background: #eef4f1; border-bottom: 1px solid #d7e0dc; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+    .session-table-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .session-list { display: grid; gap: 8px; padding: 10px; background: #f7faf8; }
     .session-card { overflow: hidden; background: #fff; border: 1px solid #dce5e1; border-radius: 6px; }
-    .session-summary { display: grid; width: 100%; grid-template-columns: 8px minmax(240px, 1fr) auto 74px 104px 104px 18px; align-items: center; gap: 12px; padding: 12px 14px; color: #233834; background: #fff; border: 0; cursor: pointer; text-align: left; }
+    .session-summary { display: grid; width: 100%; grid-template-columns: 8px minmax(200px, 1.4fr) minmax(84px, .7fr) minmax(104px, .8fr) minmax(84px, .8fr) 64px 48px 86px 86px 18px; align-items: center; gap: 12px; padding: 12px 14px; color: #233834; background: #fff; border: 0; cursor: pointer; text-align: left; }
     .session-summary:hover { background: #fbfdfc; }
     .session-summary:focus-visible { outline: 2px solid #62a58d; outline-offset: -2px; }
     .session-indicator { width: 8px; height: 8px; border-radius: 50%; }
@@ -194,7 +196,9 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .session-path { overflow: hidden; font: 13px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
     .session-path b { color: #18755f; font-weight: 800; }
     .session-id { color: #7b8b87; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
-    .session-route { overflow: hidden; color: #327662; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-cell { min-width: 0; overflow: hidden; color: #4a615b; font: 11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .session-selector, .session-upstream { color: #327662; }
+    .session-empty-cell { color: #a9b7b2; }
     .session-model { justify-self: start; max-width: 100%; overflow: hidden; padding: 1px 7px; color: #1c4a3d; background: #e5f1ec; border: 1px solid #bcd8cd; border-radius: 999px; font: 10px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
     .session-state { justify-self: start; padding: 3px 7px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
     .session-metric { display: grid; gap: 2px; text-align: right; }
@@ -214,6 +218,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     .payload-preview-head .payload-actions .icon-button:hover { color: #dceae5; background: rgba(255, 255, 255, .08); }
     .payload-preview-head .payload-actions .icon-button.is-active { color: #cbe86b; }
     .payload-preview pre { max-height: 300px; padding: 11px; margin: 0; overflow: auto; color: #cae0d8; font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .payload-preview-head { cursor: pointer; }
+    .payload-preview.is-collapsed pre { display: none; }
+    .payload-toggle-chevron { transition: transform .15s ease; }
+    .payload-preview:not(.is-collapsed) .payload-toggle-chevron { transform: rotate(180deg); }
     .request-preview { border-color: #365d50; }
     .request-preview .payload-preview-head { background: #162a24; }
     .session-headers { padding-top: 12px; }
@@ -301,7 +309,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .session-model { color: #bfe3d2; background: #1d3a31; border-color: #3c6658; }
     :root[data-theme="dark"] .session-path b { color: #79c9a7; }
     :root[data-theme="dark"] .session-id, :root[data-theme="dark"] .session-metric small, :root[data-theme="dark"] .session-overview small { color: #879e96; }
-    :root[data-theme="dark"] .session-route { color: #8bc7a9; }
+    :root[data-theme="dark"] .session-table-head { color: #94aaa2; background: #0e1916; border-color: #2b403a; }
+    :root[data-theme="dark"] .session-selector, :root[data-theme="dark"] .session-upstream { color: #8bc7a9; }
+    :root[data-theme="dark"] .session-cell { color: #a9bdb6; }
+    :root[data-theme="dark"] .session-empty-cell { color: #5c716a; }
     :root[data-theme="dark"] .session-metric strong, :root[data-theme="dark"] .session-overview strong, :root[data-theme="dark"] .header-list dd, :root[data-theme="dark"] .request-list { color: #d1dfd9; }
     :root[data-theme="dark"] .session-headers h3, :root[data-theme="dark"] .session-events h3, :root[data-theme="dark"] .header-list dt, :root[data-theme="dark"] .gateway-events time { color: #93aaa1; }
     :root[data-theme="dark"] .gateway-events li { color: #c9d8d1; border-color: #293d38; }
@@ -310,7 +321,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     :root[data-theme="dark"] .is-warning { color: #f0c466; background: #453719; }
     :root[data-theme="dark"] .is-error { color: #f3aaa6; background: #48292a; }
     :root[data-theme="dark"] .session-empty { color: #8ba198; }
-    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-workspace { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
+    @media (max-width: 760px) { .shell { width: min(100% - 24px, 1220px); margin-top: 12px; } .appbar { align-items: flex-start; flex-direction: column; padding: 16px; border-radius: 8px; } .appbar-actions { width: 100%; justify-content: flex-end; } .workspace { border-top: 1px solid #d7e0dc; border-radius: 8px; margin-top: 12px; } .workspace-top { padding: 15px; } .section-note { display: none; } .summary { display: none; } .telemetry { margin-top: 12px; } .telemetry-tabbar { padding-inline: 8px; overflow-x: auto; } .telemetry-tab { padding-inline: 10px; } .selector-workspace { margin-top: 12px; } .selector-table-head { display: none; } .selector-row { grid-template-columns: 1fr; gap: 8px; padding: 12px 15px; } .selector-actions { justify-content: space-between; } .session-table-head { display: none; } .session-summary { grid-template-columns: 8px minmax(0, 1fr) auto 72px 18px; gap: 9px; } .session-metric { display: none; } .session-metric.session-transfer { display: grid; } .session-selector, .session-upstream, .session-model { display: none; } .header-list div { grid-template-columns: 105px minmax(0, 1fr); } .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr) 34px 34px; } }
     @media (max-width: 760px) { .gateway-events li { grid-template-columns: 58px 76px minmax(0, 1fr); } }
   </style>
 </head>
@@ -357,7 +368,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     <section class="telemetry" aria-labelledby="telemetry-title">
       <h2 class="sr-only" id="telemetry-title">Telemetry</h2>
       <div class="telemetry-tabbar" role="tablist" aria-label="观测视图"><button class="telemetry-tab" type="button" role="tab" id="sessions-tab" aria-selected="true" aria-controls="sessions-panel" data-telemetry-tab="sessions">Session journal</button><button class="telemetry-tab" type="button" role="tab" id="logs-tab" aria-selected="false" aria-controls="logs-panel" data-telemetry-tab="logs"><span class="live-dot"></span><span>Live request feed</span><span class="tab-connection">SSE connected</span></button></div>
-      <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab"><div id="session-list" class="session-list"></div></div>
+      <div class="telemetry-panel" id="sessions-panel" role="tabpanel" aria-labelledby="sessions-tab"><div class="session-table-head" role="row"><span></span><span>Session</span><span>Selector</span><span>Upstream</span><span>Model</span><span>State</span><span>Status</span><span>Transfer</span><span>Duration</span><span></span></div><div id="session-list" class="session-list"></div></div>
       <div class="telemetry-panel" id="logs-panel" role="tabpanel" aria-labelledby="logs-tab" hidden><pre id="log-stream" hx-ext="sse" sse-connect="/logs" sse-swap="message" hx-swap="beforeend"></pre></div>
     </section>
   </main>
@@ -402,8 +413,60 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         try { document.execCommand('copy') ? resolve() : reject(new Error('copy failed')); } catch (error) { reject(error); } finally { area.remove(); }
       });
     }
-    async function hydrateSessionPayloads(card) { const sessionID = card.dataset.sessionId; for (const target of card.querySelectorAll('[data-session-payload]')) { const kind = target.dataset.sessionPayload; const cacheKey = sessionID + ':' + kind; if (kind === 'request' && requestPayloadCache.has(cacheKey)) { target.dataset.raw = requestPayloadCache.get(cacheKey); renderPayload(target); continue; } try { const response = await fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind); if (!response.ok) continue; const payload = await response.text(); target.dataset.raw = payload; renderPayload(target); if (kind === 'request') requestPayloadCache.set(cacheKey, payload); } catch (_) {} } }
-    function setSessionExpanded(card, expanded) { const details = card.querySelector('.session-details'); card.querySelector('[data-session-toggle]').setAttribute('aria-expanded', String(expanded)); details.hidden = !expanded; card.classList.toggle('expanded', expanded); if (expanded) { expandedSessions.add(card.dataset.sessionId); hydrateSessionPayloads(card); } else { expandedSessions.delete(card.dataset.sessionId); requestPayloadCache.delete(card.dataset.sessionId + ':request'); } }
+    function hydratePayload(target, sessionID) {
+      const kind = target.dataset.sessionPayload;
+      const cacheKey = sessionID + ':' + kind;
+      if (kind === 'request' && requestPayloadCache.has(cacheKey)) {
+        target.dataset.raw = requestPayloadCache.get(cacheKey);
+        renderPayload(target);
+        return;
+      }
+      fetch('/sessions/' + encodeURIComponent(sessionID) + '/' + kind)
+        .then(response => { if (!response.ok) throw new Error('payload ' + response.status); return response.text(); })
+        .then(payload => { target.dataset.raw = payload; renderPayload(target); if (kind === 'request') requestPayloadCache.set(cacheKey, payload); })
+        .catch(() => {});
+    }
+    function hydrateSessionPayloads(card) {
+      const sessionID = card.dataset.sessionId;
+      card.querySelectorAll('[data-session-payload]').forEach(target => {
+        const preview = target.closest('.payload-preview');
+        if (preview && preview.classList.contains('is-collapsed')) return;
+        hydratePayload(target, sessionID);
+      });
+    }
+    function setSessionExpanded(card, expanded) {
+      const details = card.querySelector('.session-details');
+      card.querySelector('[data-session-toggle]').setAttribute('aria-expanded', String(expanded));
+      details.hidden = !expanded;
+      card.classList.toggle('expanded', expanded);
+      if (expanded) {
+        expandedSessions.add(card.dataset.sessionId);
+        hydrateSessionPayloads(card);
+      } else {
+        expandedSessions.delete(card.dataset.sessionId);
+        requestPayloadCache.delete(card.dataset.sessionId + ':request');
+        card.querySelectorAll('.payload-preview').forEach(preview => {
+          preview.classList.add('is-collapsed');
+          const head = preview.querySelector('[data-payload-toggle]');
+          if (head) head.setAttribute('aria-expanded', 'false');
+          const target = preview.querySelector('[data-session-payload]');
+          if (target) delete target.dataset.raw;
+        });
+      }
+    }
+    const metricTextInterval = 1000; // ms; how often live metric text (transfer/duration) may be written
+    const pendingTextUpdates = new Map();
+    let textFlushTimer = null;
+    function scheduleTextUpdate(el, text) {
+      if (!el || el.textContent === text) return;
+      pendingTextUpdates.set(el, text);
+      if (!textFlushTimer) textFlushTimer = setTimeout(flushTextUpdates, metricTextInterval);
+    }
+    function flushTextUpdates() {
+      textFlushTimer = null;
+      pendingTextUpdates.forEach((text, el) => { if (el.isConnected && el.textContent !== text) el.textContent = text; });
+      pendingTextUpdates.clear();
+    }
     function syncSessionSummary(oldSummary, newSummary) {
       const indicator = oldSummary.querySelector('.session-indicator');
       const nextIndicator = newSummary.querySelector('.session-indicator');
@@ -414,7 +477,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         if (state.className !== nextState.className) state.className = nextState.className;
         if (state.textContent !== nextState.textContent) state.textContent = nextState.textContent;
       }
-      for (const selector of ['.session-path', '.session-id', '.session-route', '.session-model']) {
+      for (const selector of ['.session-path', '.session-id', '.session-selector', '.session-upstream', '.session-model']) {
         const el = oldSummary.querySelector(selector);
         const next = newSummary.querySelector(selector);
         if (el && next && el.textContent !== next.textContent) el.textContent = next.textContent;
@@ -426,10 +489,10 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         if (!next) return;
         const strong = metric.querySelector('strong');
         const nextStrong = next.querySelector('strong');
-        if (strong && nextStrong && strong.textContent !== nextStrong.textContent) strong.textContent = nextStrong.textContent;
+        if (strong && nextStrong) scheduleTextUpdate(strong, nextStrong.textContent);
         const small = metric.querySelector('small');
         const nextSmall = next.querySelector('small');
-        if (small && nextSmall && small.textContent !== nextSmall.textContent) small.textContent = nextSmall.textContent;
+        if (small && nextSmall) scheduleTextUpdate(small, nextSmall.textContent);
       });
     }
     function syncSessionOverview(oldOverview, newOverview) {
@@ -442,11 +505,11 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
         const nextStrong = next.querySelector('strong');
         if (strong && nextStrong) {
           if (strong.className !== nextStrong.className) strong.className = nextStrong.className;
-          if (strong.textContent !== nextStrong.textContent) strong.textContent = nextStrong.textContent;
+          scheduleTextUpdate(strong, nextStrong.textContent);
         }
         const small = item.querySelector('small');
         const nextSmall = next.querySelector('small');
-        if (small && nextSmall && small.textContent !== nextSmall.textContent) small.textContent = nextSmall.textContent;
+        if (small && nextSmall) scheduleTextUpdate(small, nextSmall.textContent);
       });
     }
     function summaryStructure(summary) { return [...summary.children].map(el => el.className).join('|'); }
@@ -519,7 +582,7 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
       else if (!sessionList.querySelector('.session-card')) { const el = doc.querySelector('.session-empty'); if (el) sessionList.append(el); }
     }
     function refreshResponsePreviews() {
-      sessionList.querySelectorAll('.session-card.expanded .response-preview [data-session-payload="response"]').forEach(pre => {
+      sessionList.querySelectorAll('.session-card.expanded .response-preview:not(.is-collapsed) [data-session-payload="response"]').forEach(pre => {
         const card = pre.closest('.session-card');
         const indicator = card.querySelector('.session-indicator');
         if (indicator && /is-(completed|warning|error)/.test(indicator.className)) return;
@@ -721,6 +784,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
     document.addEventListener('click', function (event) {
       const toggle = event.target.closest('[data-session-toggle]');
       if (toggle) { const card = toggle.closest('.session-card'); setSessionExpanded(card, toggle.getAttribute('aria-expanded') !== 'true'); return; }
+      const full = event.target.closest('[data-payload-full]');
+      if (full) { const preview = full.closest('.payload-preview'); const card = preview.closest('.session-card'); window.open('/sessions/' + encodeURIComponent(card.dataset.sessionId) + '/' + preview.querySelector('[data-session-payload]').dataset.sessionPayload + '?full=1', '_blank'); return; }
       const pretty = event.target.closest('[data-payload-pretty]');
       if (pretty) {
         const preview = pretty.closest('.payload-preview');
@@ -747,6 +812,18 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
           renderIcons(copy);
           setTimeout(() => { copy.title = original; copy.setAttribute('aria-label', original); copy.innerHTML = '<i data-lucide="copy"></i>'; renderIcons(copy); }, 1200);
         }).catch(() => {});
+        return;
+      }
+      const payloadToggle = event.target.closest('[data-payload-toggle]');
+      if (payloadToggle) {
+        const preview = payloadToggle.closest('.payload-preview');
+        const collapsed = preview.classList.contains('is-collapsed');
+        preview.classList.toggle('is-collapsed', !collapsed);
+        payloadToggle.setAttribute('aria-expanded', String(collapsed));
+        if (collapsed) {
+          const target = preview.querySelector('[data-session-payload]');
+          if (target && !target.dataset.raw) hydratePayload(target, preview.closest('.session-card').dataset.sessionId);
+        }
         return;
       }
     });
@@ -799,6 +876,7 @@ func configViews(upstreams []Upstream) []configView {
 
 func serveConfigPage(w http.ResponseWriter, _ *http.Request, selectors []AppSelector, debug bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	if err := pageTemplate.Execute(w, pageView{Debug: debug, AppSelectors: selectors}); err != nil {
 		http.Error(w, "failed to render page", http.StatusInternalServerError)
 	}
@@ -806,6 +884,7 @@ func serveConfigPage(w http.ResponseWriter, _ *http.Request, selectors []AppSele
 
 func serveConfigFragment(w http.ResponseWriter, upstreams []Upstream) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	if err := fragmentTemplate.Execute(w, configViews(upstreams)); err != nil {
 		http.Error(w, "failed to render config", http.StatusInternalServerError)
 	}
