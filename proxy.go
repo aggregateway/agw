@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -40,13 +42,28 @@ type HeaderMatch struct {
 	regex         *regexp.Regexp
 }
 
+type BodyMatch struct {
+	Field         string `yaml:"field" json:"field"`
+	Operator      string `yaml:"operator" json:"operator"`
+	Value         string `yaml:"value,omitempty" json:"value,omitempty"`
+	CaseSensitive bool   `yaml:"caseSensitive,omitempty" json:"caseSensitive,omitempty"`
+	regex         *regexp.Regexp
+}
+
 type AppSelector struct {
-	Name  string           `yaml:"name" json:"name"`
-	Match AppSelectorMatch `yaml:"match,omitempty" json:"match,omitempty"`
+	Name    string           `yaml:"name" json:"name"`
+	Match   AppSelectorMatch `yaml:"match,omitempty" json:"match,omitempty"`
+	Rewrite []FieldRewrite   `yaml:"rewrite,omitempty" json:"rewrite,omitempty"`
 }
 
 type AppSelectorMatch struct {
 	Headers []HeaderMatch `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Body    []BodyMatch   `yaml:"body,omitempty" json:"body,omitempty"`
+}
+
+type FieldRewrite struct {
+	Field string `yaml:"field" json:"field"`
+	Value string `yaml:"value" json:"value"`
 }
 
 type Settings struct {
@@ -122,6 +139,24 @@ func validateSettings(settings *Settings) error {
 				return fmt.Errorf("app selector %q header %d: %w", name, j+1, err)
 			}
 		}
+		for k := range selector.Match.Body {
+			matcher := &selector.Match.Body[k]
+			if strings.TrimSpace(matcher.Field) == "" || strings.ContainsAny(matcher.Field, "\r\n") || strings.ContainsAny(matcher.Value, "\r\n") {
+				return fmt.Errorf("app selector %q body rule %d is invalid", name, k+1)
+			}
+			if !supportedHeaderOperator(matcher.Operator) {
+				return fmt.Errorf("app selector %q has unsupported body operator %q", name, matcher.Operator)
+			}
+			if err := compileBodyMatcher(matcher); err != nil {
+				return fmt.Errorf("app selector %q body rule %d: %w", name, k+1, err)
+			}
+		}
+		for r := range selector.Rewrite {
+			rewrite := &selector.Rewrite[r]
+			if strings.TrimSpace(rewrite.Field) == "" || strings.ContainsAny(rewrite.Field, "\r\n") || strings.ContainsAny(rewrite.Value, "\r\n") {
+				return fmt.Errorf("app selector %q rewrite rule %d is invalid", name, r+1)
+			}
+		}
 	}
 	return validateUpstreams(settings.Upstreams, selectorNames)
 }
@@ -173,6 +208,26 @@ func supportedHeaderOperator(operator string) bool {
 }
 
 func compileHeaderMatcher(matcher *HeaderMatch) error {
+	matcher.regex = nil
+	if !strings.EqualFold(matcher.Operator, "regex") {
+		return nil
+	}
+	if matcher.Value == "" {
+		return errors.New("regex value is empty")
+	}
+	pattern := matcher.Value
+	if !matcher.CaseSensitive {
+		pattern = "(?i)" + pattern
+	}
+	compiled, err := regexp.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid regex: %w", err)
+	}
+	matcher.regex = compiled
+	return nil
+}
+
+func compileBodyMatcher(matcher *BodyMatch) error {
 	matcher.regex = nil
 	if !strings.EqualFold(matcher.Operator, "regex") {
 		return nil
@@ -275,13 +330,193 @@ func headerMatchMatches(matcher HeaderMatch, headers http.Header) bool {
 	return false
 }
 
-func appSelectorMatches(selector AppSelector, headers http.Header) bool {
+func appSelectorMatches(selector AppSelector, headers http.Header, body []byte) bool {
 	for _, matcher := range selector.Match.Headers {
 		if !headerMatchMatches(matcher, headers) {
 			return false
 		}
 	}
+	for _, matcher := range selector.Match.Body {
+		if !bodyMatchMatches(matcher, body) {
+			return false
+		}
+	}
 	return true
+}
+
+func bodyMatchMatches(matcher BodyMatch, body []byte) bool {
+	value, ok := bodyFieldValue(body, matcher.Field)
+	if !ok {
+		return false
+	}
+	if strings.EqualFold(matcher.Operator, "present") {
+		return true
+	}
+	needle := matcher.Value
+	comparison := value
+	if !matcher.CaseSensitive {
+		needle = strings.ToLower(needle)
+		comparison = strings.ToLower(comparison)
+	}
+	switch strings.ToLower(strings.TrimSpace(matcher.Operator)) {
+	case "exact":
+		return comparison == needle
+	case "prefix":
+		return strings.HasPrefix(comparison, needle)
+	case "contains":
+		return strings.Contains(comparison, needle)
+	case "regex":
+		compiled := matcher.regex
+		if compiled == nil {
+			if err := compileBodyMatcher(&matcher); err != nil {
+				return false
+			}
+			compiled = matcher.regex
+		}
+		return compiled.MatchString(value)
+	}
+	return false
+}
+
+// bodyFieldValue extracts the JSON value at a dotted field path (for example
+// "model" or "metadata.provider"). Scalar values are converted to their string
+// form; arrays and objects are JSON-encoded so contains/exact can search their
+// serialized text. Non-JSON bodies and missing fields never match.
+func bodyFieldValue(body []byte, field string) (string, bool) {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return "", false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
+	var doc any
+	if err := decoder.Decode(&doc); err != nil {
+		return "", false
+	}
+	current := doc
+	for _, part := range strings.Split(field, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return "", false
+		}
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		current, ok = obj[part]
+		if !ok {
+			return "", false
+		}
+	}
+	if current == nil {
+		return "", false
+	}
+	return scalarString(current), true
+}
+
+func scalarString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	case bool:
+		return strconv.FormatBool(typed)
+	case nil:
+		return ""
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return ""
+		}
+		return string(encoded)
+	}
+}
+
+// applyRewrites sets JSON body fields with jq-style setpath semantics:
+// intermediate objects are created when missing and typed values (numbers,
+// booleans, null, arrays, objects) keep their JSON type. Only object-rooted
+// JSON bodies are rewritten; everything else is returned unchanged.
+func applyRewrites(body []byte, rewrites []FieldRewrite) []byte {
+	if len(rewrites) == 0 {
+		return body
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return body
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
+	decoder.UseNumber()
+	var doc map[string]any
+	if err := decoder.Decode(&doc); err != nil {
+		return body
+	}
+	for _, rewrite := range rewrites {
+		setJSONPath(doc, rewrite.Field, parseRewriteValue(rewrite.Value))
+	}
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return body
+	}
+	return encoded
+}
+
+func setJSONPath(root map[string]any, field string, value any) {
+	parts := strings.Split(field, ".")
+	if len(parts) == 0 {
+		return
+	}
+	current := root
+	for _, part := range parts[:len(parts)-1] {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return
+		}
+		next, ok := current[part].(map[string]any)
+		if !ok {
+			next = make(map[string]any)
+			current[part] = next
+		}
+		current = next
+	}
+	last := strings.TrimSpace(parts[len(parts)-1])
+	if last != "" {
+		current[last] = value
+	}
+}
+
+// parseRewriteValue treats the configured value as JSON when it parses, so
+// numbers, booleans, null, arrays and objects keep their JSON type; otherwise
+// the raw text is used as a plain string.
+func parseRewriteValue(value string) any {
+	var parsed any
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	if err := decoder.Decode(&parsed); err == nil {
+		return parsed
+	}
+	return value
+}
+
+func applySelectorRewrites(body []byte, selectors []AppSelector, selected string, logger *log.Logger, session *trackedSession) []byte {
+	for _, selector := range selectors {
+		if selector.Name != selected || len(selector.Rewrite) == 0 {
+			continue
+		}
+		rewritten := applyRewrites(body, selector.Rewrite)
+		if bytes.Equal(rewritten, body) {
+			return body
+		}
+		for _, rewrite := range selector.Rewrite {
+			detail := rewrite.Field + " -> " + rewrite.Value
+			logger.Printf("| REWRITE | %s", detail)
+			if session != nil {
+				session.addEvent("rewrite", detail)
+			}
+		}
+		return rewritten
+	}
+	return body
 }
 
 func upstreamSupportsSelector(upstream Upstream, selector string) bool {
@@ -293,7 +528,7 @@ func upstreamSupportsSelector(upstream Upstream, selector string) bool {
 	return false
 }
 
-func routeUpstreams(upstreams []Upstream, selectors []AppSelector, headers http.Header) ([]routedUpstream, string, error) {
+func routeUpstreams(upstreams []Upstream, selectors []AppSelector, headers http.Header, body []byte) ([]routedUpstream, string, error) {
 	if len(selectors) == 0 {
 		routed := make([]routedUpstream, 0, len(upstreams))
 		for index, upstream := range upstreams {
@@ -302,7 +537,7 @@ func routeUpstreams(upstreams []Upstream, selectors []AppSelector, headers http.
 		return routed, "", nil
 	}
 	for _, selector := range selectors {
-		if !appSelectorMatches(selector, headers) {
+		if !appSelectorMatches(selector, headers, body) {
 			continue
 		}
 		routed := make([]routedUpstream, 0, len(upstreams))
@@ -377,13 +612,15 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body.Close()
 	session := trackedSessionFromContext(r.Context())
+	originalModel := ""
 	if session != nil {
-		session.setRequestBody(r.Header.Get("Content-Type"), body)
+		originalModel, _ = bodyFieldValue(body, "model")
 	}
-	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.Header)
+	routedUpstreams, appSelector, routeErr := routeUpstreams(upstreams, appSelectors, r.Header, body)
 	if routeErr != nil {
 		p.Logger.Printf("| ROUTER | NO_MATCH | %v", routeErr)
 		if session != nil {
+			session.setRequestBody(r.Header.Get("Content-Type"), body)
 			session.setAppSelector(appSelector)
 			session.addEvent("route error", routeErr.Error())
 		}
@@ -396,6 +633,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			session.setAppSelector(appSelector)
 			session.addEvent("route", "appSelector="+appSelector)
 		}
+		body = applySelectorRewrites(body, appSelectors, appSelector, p.Logger, session)
+	}
+	if session != nil {
+		session.setRequestBody(r.Header.Get("Content-Type"), body)
+		session.setOriginalModel(originalModel)
 	}
 
 	var lastErr error

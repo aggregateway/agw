@@ -46,6 +46,8 @@ type sessionRequest struct {
 	ResponseFile       *os.File
 	AppSelector        string
 	Upstream           string
+	Model              string
+	OriginalModel      string
 	Events             []sessionEvent
 }
 
@@ -107,6 +109,7 @@ type sessionRequestCard struct {
 	ResponseBytes      string
 	AppSelector        string
 	Upstream           string
+	Model              string
 	HasRequestBody     bool
 	HasResponseBody    bool
 	Events             []sessionEventCard
@@ -122,7 +125,7 @@ var sessionCardsTemplate = template.Must(template.New("session-cards").Parse(`{{
 <article class="session-card" data-session-id="{{.ID}}">
   <button class="session-summary" type="button" data-session-toggle aria-expanded="false">
     <span class="session-indicator {{.StateClass}}"></span>
-    <span class="session-primary"><span class="session-path"><b>{{.Latest.Method}}</b> {{.Latest.Path}}</span><span class="session-id">{{.ShortID}} · {{.Started}}</span>{{if .Latest.Upstream}}<span class="session-route">{{if .Latest.AppSelector}}{{.Latest.AppSelector}} / {{end}}{{.Latest.Upstream}}</span>{{end}}</span>
+    <span class="session-primary"><span class="session-path"><b>{{.Latest.Method}}</b> {{.Latest.Path}}</span><span class="session-id">{{.ShortID}} · {{.Started}}</span>{{if .Latest.Upstream}}<span class="session-route">{{if .Latest.AppSelector}}{{.Latest.AppSelector}} / {{end}}{{.Latest.Upstream}}</span>{{end}}{{if .Latest.Model}}<span class="session-model">{{.Latest.Model}}</span>{{end}}</span>
     <span class="session-state {{.StateClass}}">{{.State}}</span>
     <span class="session-metric"><small>status</small><strong>{{.Status}}</strong></span>
     <span class="session-metric session-transfer"><small>latest transfer</small><strong>{{.Latest.Bytes}}</strong></span>
@@ -130,7 +133,7 @@ var sessionCardsTemplate = template.Must(template.New("session-cards").Parse(`{{
     <i data-lucide="chevron-down" class="session-chevron"></i>
   </button>
   <div class="session-details" hidden>
-    <div class="session-overview"><span><small>App selector</small><strong>{{.Latest.AppSelector}}</strong></span><span><small>Upstream</small><strong>{{.Latest.Upstream}}</strong></span><span><small>Connection</small><strong class="{{.StateClass}}">{{.State}}</strong></span><span><small>Requests</small><strong>{{.RequestCount}}</strong></span><span><small>Latest transfer</small><strong>{{.Latest.Bytes}}</strong></span><span><small>Latest duration</small><strong>{{.Latest.Duration}}</strong></span></div>
+    <div class="session-overview"><span><small>App selector</small><strong>{{.Latest.AppSelector}}</strong></span><span><small>Model</small><strong>{{.Latest.Model}}</strong></span><span><small>Upstream</small><strong>{{.Latest.Upstream}}</strong></span><span><small>Connection</small><strong class="{{.StateClass}}">{{.State}}</strong></span><span><small>Requests</small><strong>{{.RequestCount}}</strong></span><span><small>Latest transfer</small><strong>{{.Latest.Bytes}}</strong></span><span><small>Latest duration</small><strong>{{.Latest.Duration}}</strong></span></div>
     {{if .Latest.HasRequestBody}}<section class="payload-preview request-preview"><div class="payload-preview-head"><h3>Intercepted request</h3><span>{{.Latest.RequestContentType}} · {{.Latest.RequestBytes}}</span></div><pre data-session-payload="request"></pre></section>{{end}}
     {{if .Latest.HasResponseBody}}<section class="payload-preview response-preview"><div class="payload-preview-head"><h3>Intercepted response</h3><span>{{.Latest.ContentType}} · {{.Latest.ResponseBytes}} · live tail</span></div><pre data-session-payload="response"></pre></section>{{end}}
     <div class="session-detail-grid"><section><h3>Latest request headers</h3><dl class="header-list">{{range .Latest.Headers}}<div><dt>{{.Name}}</dt><dd>{{.Value}}</dd></div>{{else}}<div><dt>Headers</dt><dd>unavailable</dd></div>{{end}}</dl></section><section><h3>Gateway events</h3><ol class="gateway-events">{{range .Latest.Events}}<li><time>{{.At}}</time><span class="gateway-event-kind">{{.Kind}}</span><span>{{.Detail}}</span></li>{{else}}<li class="gateway-events-empty">Waiting for upstream activity</li>{{end}}</ol></section></div>
@@ -194,14 +197,25 @@ func (t *trackedSession) setContentType(contentType string) {
 func (t *trackedSession) setRequestBody(contentType string, body []byte) {
 	path := t.hub.requestPath(t)
 	var bytesWritten int64
+	model := ""
 	if len(body) > 0 && path != "" {
 		if err := os.WriteFile(path, body, 0600); err == nil {
 			bytesWritten = int64(len(body))
 		}
 	}
+	if len(body) > 0 {
+		model, _ = bodyFieldValue(body, "model")
+	}
 	t.hub.updateRequest(t, func(request *sessionRequest) {
 		request.RequestContentType = contentType
 		request.RequestBytes = bytesWritten
+		request.Model = model
+	})
+}
+
+func (t *trackedSession) setOriginalModel(model string) {
+	t.hub.updateRequest(t, func(request *sessionRequest) {
+		request.OriginalModel = model
 	})
 }
 
@@ -560,7 +574,11 @@ func makeSessionRequestCard(request *sessionRequest) sessionRequestCard {
 	for _, event := range request.Events {
 		events = append(events, sessionEventCard{At: event.At.Format("15:04:05"), Kind: event.Kind, Detail: event.Detail})
 	}
-	return sessionRequestCard{Method: request.Method, Path: request.Path, Started: request.StartedAt.Format("15:04:05"), Duration: formatSessionDuration(request.StartedAt, request.CompletedAt), State: state, Status: formatStatus(request.Status), Bytes: formatBytes(request.Bytes), Headers: request.Headers, ContentType: request.ContentType, RequestContentType: request.RequestContentType, RequestBytes: formatBytes64(request.RequestBytes), ResponseBytes: formatBytes64(request.ResponseBytes), AppSelector: request.AppSelector, Upstream: request.Upstream, HasRequestBody: request.RequestBytes > 0, HasResponseBody: request.ResponseBytes > 0, Events: events}
+	model := request.Model
+	if request.OriginalModel != "" && request.OriginalModel != request.Model {
+		model = request.OriginalModel + " => " + request.Model
+	}
+	return sessionRequestCard{Method: request.Method, Path: request.Path, Started: request.StartedAt.Format("15:04:05"), Duration: formatSessionDuration(request.StartedAt, request.CompletedAt), State: state, Status: formatStatus(request.Status), Bytes: formatBytes(request.Bytes), Headers: request.Headers, ContentType: request.ContentType, RequestContentType: request.RequestContentType, RequestBytes: formatBytes64(request.RequestBytes), ResponseBytes: formatBytes64(request.ResponseBytes), AppSelector: request.AppSelector, Upstream: request.Upstream, Model: model, HasRequestBody: request.RequestBytes > 0, HasResponseBody: request.ResponseBytes > 0, Events: events}
 }
 
 func sessionState(state string) (string, string) {

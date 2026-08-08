@@ -6,6 +6,15 @@ appSelectors:
         - name: User-Agent
           operator: contains
           value: OpenAI
+  - name: deepseek-model
+    match:
+      body:
+        - field: model
+          operator: prefix
+          value: deepseek
+    rewrite:
+      - field: model
+        value: gpt-5.6-luna
   - name: fallback
 upstreams:
   - url: https://pai.d1v.ai/v1
@@ -14,6 +23,12 @@ upstreams:
     authorization:
       type: bearer
       value: replace-with-your-token
+  - url: https://deepseek.example/v1
+    name: deepseek
+    appSelectors: [deepseek-model]
+    authorization:
+      type: bearer
+      value: replace-with-your-deepseek-token
   - url: https://backup.example/v1
     name: fallback
     appSelectors: [fallback]

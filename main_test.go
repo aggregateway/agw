@@ -3,6 +3,7 @@ package agw
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -237,7 +238,7 @@ func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
 		{Name: "d1v-backup", AppSelectors: []string{"codex-luna"}},
 	}
 	request := http.Header{"User-Agent": []string{"Codex/1.0"}}
-	routed, selected, err := routeUpstreams(upstreams, selectors, request)
+	routed, selected, err := routeUpstreams(upstreams, selectors, request, nil)
 	if err != nil || selected != "codex-luna" || len(routed) != 2 {
 		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
 	}
@@ -245,9 +246,219 @@ func TestAppSelectorRoutesOnlyCompatibleUpstreams(t *testing.T) {
 		t.Fatalf("non-compatible upstream entered retry chain: %#v", routed)
 	}
 
-	routed, selected, err = routeUpstreams(upstreams, selectors, http.Header{"User-Agent": []string{"OpenAI/1.0"}})
+	routed, selected, err = routeUpstreams(upstreams, selectors, http.Header{"User-Agent": []string{"OpenAI/1.0"}}, nil)
 	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
 		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
+	}
+}
+
+func TestBodySelectorRoutesByModelField(t *testing.T) {
+	selectors := []AppSelector{
+		{Name: "deepseek-model", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "exact", Value: "deepseek"}}}},
+		{Name: "default"},
+	}
+	upstreams := []Upstream{
+		{Name: "deepseek", AppSelectors: []string{"deepseek-model"}},
+		{Name: "luna", AppSelectors: []string{"default"}},
+	}
+	routed, selected, err := routeUpstreams(upstreams, selectors, http.Header{}, []byte(`{"model":"deepseek","messages":[]}`))
+	if err != nil || selected != "deepseek-model" || len(routed) != 1 || routed[0].Upstream.Name != "deepseek" {
+		t.Fatalf("routed upstreams = %#v, selector=%q, error=%v", routed, selected, err)
+	}
+
+	routed, selected, err = routeUpstreams(upstreams, selectors, http.Header{}, []byte(`{"model":"gpt-5.6-luna","messages":[]}`))
+	if err != nil || selected != "default" || len(routed) != 1 || routed[0].Upstream.Name != "luna" {
+		t.Fatalf("default route = %#v, selector=%q, error=%v", routed, selected, err)
+	}
+}
+
+func TestBodySelectorNestedFieldPrefixAndCase(t *testing.T) {
+	selector := AppSelector{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "metadata.provider", Operator: "prefix", Value: "Deep"}}}}
+	if !appSelectorMatches(selector, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"deepseek"}}`)) {
+		t.Fatal("nested case-insensitive prefix should match")
+	}
+	if appSelectorMatches(selector, http.Header{}, []byte(`{"model":"x","metadata":{"provider":"openai"}}`)) {
+		t.Fatal("prefix rule matched an unrelated value")
+	}
+	if appSelectorMatches(selector, http.Header{}, []byte(`not json`)) {
+		t.Fatal("non-JSON body must not match")
+	}
+	if appSelectorMatches(selector, http.Header{}, []byte(`{"metadata":42}`)) {
+		t.Fatal("missing nested field must not match")
+	}
+	if appSelectorMatches(selector, http.Header{}, []byte(`{"metadata":{"provider":null}}`)) {
+		t.Fatal("null value must not match")
+	}
+}
+
+func TestBodySelectorPresentAndValidation(t *testing.T) {
+	selector := AppSelector{Name: "stream", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "stream", Operator: "present"}}}}
+	if !appSelectorMatches(selector, http.Header{}, []byte(`{"stream":true}`)) {
+		t.Fatal("present rule should match when field exists")
+	}
+	if appSelectorMatches(selector, http.Header{}, []byte(`{"model":"x"}`)) {
+		t.Fatal("present rule matched a missing field")
+	}
+	_, err := parseSettings([]byte(`appSelectors:
+  - name: invalid
+    match:
+      body:
+        - field: model
+          operator: regex
+          value: "["
+upstreams:
+  - url: https://example.com
+    appSelectors: [invalid]
+`))
+	if err == nil || !strings.Contains(err.Error(), "invalid regex") {
+		t.Fatalf("invalid body regex error = %v", err)
+	}
+}
+
+func TestProxyRoutesByJSONBodyAndForwardsBody(t *testing.T) {
+	deepseek := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if string(body) != `{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}` {
+			t.Errorf("body not forwarded intact: %q", body)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "deepseek response")
+	}))
+	defer deepseek.Close()
+	luna := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("luna upstream received a deepseek-routed request")
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer luna.Close()
+
+	proxy := &Proxy{
+		Upstreams: []Upstream{
+			{Name: "ds", URL: deepseek.URL, AppSelectors: []string{"ds-model"}, Authorization: &Authorization{Type: "none"}},
+			{Name: "luna", URL: luna.URL, AppSelectors: []string{"luna-model"}, Authorization: &Authorization{Type: "none"}},
+		},
+		AppSelectors: []AppSelector{
+			{Name: "ds-model", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek"}}}},
+			{Name: "luna-model", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "gpt"}}}},
+		},
+		Client: http.DefaultClient,
+		Logger: log.New(io.Discard, "", 0),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	proxy.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "deepseek response" {
+		t.Fatalf("routed response = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestApplyRewritesSetsAndCreatesFields(t *testing.T) {
+	got := applyRewrites([]byte(`{"model":"deepseek","messages":[]}`), []FieldRewrite{
+		{Field: "model", Value: "gpt-5.6-luna"},
+		{Field: "stream", Value: "true"},
+		{Field: "temperature", Value: "0.5"},
+		{Field: "metadata.provider", Value: "openai"},
+	})
+	var doc map[string]any
+	if err := json.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("rewritten body is not valid JSON: %v\n%s", err, got)
+	}
+	if doc["model"] != "gpt-5.6-luna" {
+		t.Fatalf("model = %#v", doc["model"])
+	}
+	if doc["stream"] != true {
+		t.Fatalf("stream = %#v", doc["stream"])
+	}
+	if doc["temperature"] != 0.5 {
+		t.Fatalf("temperature = %#v", doc["temperature"])
+	}
+	metadata, ok := doc["metadata"].(map[string]any)
+	if !ok || metadata["provider"] != "openai" {
+		t.Fatalf("nested metadata = %#v", doc["metadata"])
+	}
+}
+
+func TestApplyRewritesLeavesNonObjectBodiesAlone(t *testing.T) {
+	rewrites := []FieldRewrite{{Field: "model", Value: "x"}}
+	if got := string(applyRewrites([]byte(`[{"model":"a"}]`), rewrites)); got != `[{"model":"a"}]` {
+		t.Fatalf("array root was rewritten: %s", got)
+	}
+	if got := string(applyRewrites([]byte(`not json`), rewrites)); got != `not json` {
+		t.Fatalf("non-JSON body was rewritten: %s", got)
+	}
+	if got := string(applyRewrites([]byte(`{"model":`), rewrites)); got != `{"model":` {
+		t.Fatalf("malformed JSON body was rewritten: %s", got)
+	}
+	if got := string(applyRewrites([]byte(`{"model":"a"}`), nil)); got != `{"model":"a"}` {
+		t.Fatalf("empty rewrites changed the body: %s", got)
+	}
+}
+
+func TestProxyRewritesBodyBeforeForwarding(t *testing.T) {
+	var rewrittenBody []byte
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rewrittenBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer primary.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var doc map[string]any
+		if err := json.Unmarshal(body, &doc); err != nil {
+			t.Errorf("rewritten body is not valid JSON: %v", err)
+		}
+		if doc["model"] != "gpt-5.6-luna" || doc["stream"] != true {
+			t.Errorf("upstream received unrewritten body: %s", body)
+		}
+		if _, ok := doc["messages"]; !ok {
+			t.Errorf("original fields missing after rewrite: %s", body)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "rewritten ok")
+	}))
+	defer backup.Close()
+
+	proxy := &Proxy{
+		Upstreams: []Upstream{
+			{Name: "ds-primary", URL: primary.URL, AppSelectors: []string{"ds"}, Authorization: &Authorization{Type: "none"}},
+			{Name: "ds-backup", URL: backup.URL, AppSelectors: []string{"ds"}, Authorization: &Authorization{Type: "none"}},
+		},
+		AppSelectors: []AppSelector{
+			{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek"}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}, {Field: "stream", Value: "true"}}},
+		},
+		Client: http.DefaultClient,
+		Logger: log.New(io.Discard, "", 0),
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+
+	proxy.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "rewritten ok" {
+		t.Fatalf("routed response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(rewrittenBody, &doc); err != nil {
+		t.Fatalf("retried body is not valid JSON: %v", err)
+	}
+	if doc["model"] != "gpt-5.6-luna" {
+		t.Fatalf("retry attempt received unrewritten body: %s", rewrittenBody)
+	}
+}
+
+func TestRewriteValidationRejectsEmptyField(t *testing.T) {
+	_, err := parseSettings([]byte(`appSelectors:
+  - name: invalid
+    rewrite:
+      - field: ""
+        value: gpt-5.6-luna
+upstreams:
+  - url: https://example.com
+    appSelectors: [invalid]
+`))
+	if err == nil || !strings.Contains(err.Error(), "rewrite rule") {
+		t.Fatalf("empty rewrite field error = %v", err)
 	}
 }
 
@@ -283,7 +494,7 @@ upstreams:
 
 func TestAppSelectorWithoutRulesMatchesAllRequests(t *testing.T) {
 	selector := AppSelector{Name: "catch-all"}
-	if !appSelectorMatches(selector, http.Header{"User-Agent": []string{"Codex/1.0"}}) {
+	if !appSelectorMatches(selector, http.Header{"User-Agent": []string{"Codex/1.0"}}, nil) {
 		t.Fatal("AppSelector without header rules should match every request")
 	}
 }
@@ -493,7 +704,7 @@ func TestProxySessionCardShowsAppSelectorAndUpstream(t *testing.T) {
 		Logger:       log.New(io.Discard, "", 0),
 		Sessions:     hub,
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader("payload"))
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.6-luna","messages":[]}`))
 	request.Header.Set("User-Agent", "Codex/1.0")
 	requestLogger(proxy.Logger, proxy).ServeHTTP(httptest.NewRecorder(), request)
 
@@ -503,6 +714,41 @@ func TestProxySessionCardShowsAppSelectorAndUpstream(t *testing.T) {
 	}
 	if !strings.Contains(content, "codex-luna") || !strings.Contains(content, "UPSTREAM[0:d1v.ai]") {
 		t.Fatalf("session card route details missing: %s", content)
+	}
+	if !strings.Contains(content, `class="session-model">gpt-5.6-luna<`) {
+		t.Fatalf("session card does not show the request model: %s", content)
+	}
+}
+
+func TestSessionCardShowsRewrittenModel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+
+	hub := newSessionHub()
+	defer hub.close()
+	proxy := &Proxy{
+		Upstreams:    []Upstream{{URL: upstream.URL, AppSelectors: []string{"ds"}, Authorization: &Authorization{Type: "none"}}},
+		AppSelectors: []AppSelector{{Name: "ds", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek"}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}}}},
+		Client:       http.DefaultClient,
+		Logger:       log.New(io.Discard, "", 0),
+		Sessions:     hub,
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"deepseek-v4-flash","messages":[]}`))
+	request.Header.Set("Content-Type", "application/json")
+	requestLogger(proxy.Logger, proxy).ServeHTTP(httptest.NewRecorder(), request)
+
+	content, err := hub.renderCards()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, `class="session-model">deepseek-v4-flash =&gt; gpt-5.6-luna<`) {
+		t.Fatalf("session card does not show the original => rewritten model: %s", content)
+	}
+	if strings.Contains(content, `class="session-model">deepseek-v4-flash<`) {
+		t.Fatalf("session card hides the rewrite: %s", content)
 	}
 }
 
@@ -535,9 +781,24 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 		t.Fatalf("config page status = %d", recorder.Code)
 	}
 	content := recorder.Body.String()
-	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", "Header match rules", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector"} {
+	for _, expected := range []string{"agw-theme", "'dark'", "theme-toggle", "telemetry-tabbar", "SSE connected", "sessions-panel", "logs-panel", "aria-selected=\"true\"", "AppSelector registry", "Compatible AppSelectors", "selector-workspace", "selector-table-head", "Header match<br>rules", "selector-count", "updateSelectorSummary", "match-value-field", "match-value-actions", "selector-no-rules", "No rules - matches all requests", ">Actions<", "data-selector", "data-drop-zone", "drop-indicator", "松手后放到这里", "data-duplicate-row", "data-duplicate-selector"} {
 		if !strings.Contains(content, expected) {
 			t.Fatalf("config page missing %q", expected)
+		}
+	}
+	for _, expected := range []string{"Body match<br>rules", "data-selector-body-matches", "data-body-field", "No body rules", "data-add-body-match", "data-delete-body-match"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page missing body match UI %q", expected)
+		}
+	}
+	for _, expected := range []string{"Request rewrite<br>rules", "data-selector-rewrites", "data-rewrite-field", "data-rewrite-value", "No rewrites", "data-add-rewrite", "data-delete-rewrite"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page missing rewrite UI %q", expected)
+		}
+	}
+	for _, expected := range []string{"reconcileSessionCards", "updateSessionCard", "refreshResponsePreviews", "EventSource('/sessions/stream')"} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page missing session journal JS %q", expected)
 		}
 	}
 	workspace := strings.Index(content, `aria-labelledby="routing-title"`)
@@ -549,6 +810,24 @@ func TestConfigPageDefaultsToDarkSessionJournal(t *testing.T) {
 	selectorWorkspace := strings.Index(content, `class="workspace selector-workspace"`)
 	if routingEnd < 0 || selectorWorkspace < 0 || selectorWorkspace <= workspace+routingEnd {
 		t.Fatalf("AppSelector registry is still nested in the upstream routing container")
+	}
+}
+
+func TestConfigPageRendersBodyMatchRules(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	serveConfigPage(recorder, httptest.NewRequest(http.MethodGet, "/", nil), []AppSelector{
+		{Name: "deepseek", Match: AppSelectorMatch{Body: []BodyMatch{{Field: "model", Operator: "prefix", Value: "deepseek", CaseSensitive: true}}}, Rewrite: []FieldRewrite{{Field: "model", Value: "gpt-5.6-luna"}}},
+	}, false)
+	content := recorder.Body.String()
+	for _, expected := range []string{`value="deepseek"`, `value="model"`, `data-selector-body-match`, `data-case-sensitive="true"`} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page body rules missing %q", expected)
+		}
+	}
+	for _, expected := range []string{`value="gpt-5.6-luna"`, `data-selector-rewrite`} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("config page rewrite rules missing %q", expected)
+		}
 	}
 }
 
